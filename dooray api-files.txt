@@ -1,0 +1,86 @@
+파일 업/다운로드 API
+Project > Projects > Posts
+
+POST /project/v1/projects/{project-id}/posts/{post-id}/files - 업무에 첨부파일 업로드
+
+GET /project/v1/projects/{project-id}/posts/{post-id}/files - 업무에 첨부파일 다운로드
+
+Drive > Drives > Files
+
+POST /drive/v1/drives/{drive-id}/files?parentId={} - 드라이브에 파일 업로드
+
+GET /drive/v1/drives/{drive-id}/files/{file-id}?media=raw - 드라이브에 파일 다운로드
+
+PUT /drive/v1/drives/{drive-id}/files/{file-id}?media=raw - 드라이브에 파일 수정
+
+Wiki > Files
+
+POST /wiki/v1/wikis/{wiki-id}/pages/{pageId}/files - 위키 페이지에 파일 업로드
+
+POST /wiki/v1/wikis/{wikiId}/files - 위키에 파일 업로드
+
+동작 과정
+서비스 API 문서에 명시된 API 주소로 요청
+
+307 응답과 location 헤더의 value(url)를 확인
+
+전달 받은 location(url)로 Authorization, 파일 정보를 포함하여 재요청
+
+동작 과정 curl 예제
+1. 서비스 API 문서에 명시된 API 주소로 요청
+
+$ curl -X POST 'https://api.dooray.com/project/v1/projects/3718869279517138805/posts/3817609631288388768/files' \
+--header 'Authorization: dooray-api {서비스 API token}' \
+--form 'file=@"/Users/nhn/image.gif"' \
+--include
+2. 307 응답과 location 헤더의 value(url)를 확인
+
+HTTP/2 307
+...
+location: https://file-api.dooray.com/uploads/project/v1/projects/3718869279517138805/posts/3817609631288388768/files
+3. 전달 받은 location(url)로 Authorization, 파일 정보를 포함하여 재요청
+
+$ curl -X POST 'https://file-api.dooray.com/uploads/project/v1/projects/3718869279517138805/posts/3817609631288388768/files' \
+--header 'Authorization: dooray-api {서비스 API token}' \
+--form 'file=@"/Users/nhn/image.gif"'
+{"header":{"resultCode":0,"resultMessage":"","isSuccessful":true},"result":{"id":"3817615263301153584"}}
+응답 확인
+
+4. 업무에 첨부파일이 정상 업로드 되었는지 확인
+
+Inline-image-2024-11-11 16.16.48.821.png
+
+각 API의 상세 방법은 서비스 API 문서를 참고 해주시기 바랍니다.
+
+
+examples
+
+### ex 1
+
+curl -v -X POST "https://file-api.dooray.com/uploads/drive/v1/drives/{}/files?parentId={}" \
+    -H "Authorization: dooray-api {token}" \
+    -H "Content-Type: multipart/form-data; boundary=boundary" \
+    -F "file=@/file/path/to/upload/file.png;filename=file.png;type=image/png"
+
+### ex 2
+
+curl -v -X PUT "https://api.dooray.com/drive/v1/drives/{}/files/{}?media=raw" \
+    -H "Authorization: dooray-api {token}" \
+    -H "Content-Type: multipart/form-data; boundary=boundary" \
+    -F "file=@/file/path/to/upload/file.png;filename=file.png;type=image/png"
+
+---
+
+< HTTP/2 307 
+...
+< location: https://file-api.dooray.com/uploads/drive/v1/drives/{}/files/{}
+< x-request-id: xxxxxx
+<
+
+
+### ex 3
+
+curl -v -X PUT "https://file-api.dooray.com/uploads/drive/v1/drives/{}/files/{}" \
+    -H "Authorization: dooray-api {token}" \
+    -H "Content-Type: multipart/form-data; boundary=boundary" \
+    -F "file=@/file/path/to/upload/file.png;filename=file.png;type=image/png"

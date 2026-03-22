@@ -1,0 +1,6 @@
+domain: https://api.dooray.com
+token: xxxxxxxxxxxx:yyyyyyyyyyyyyyyyyyyyyy
+default_project_id: "1234567890123456789"
+default_wiki_id: "1234567890123456789"
+default_drive_id: "1234567890123456789"
+default_calendar_id: "1234567890123456789"

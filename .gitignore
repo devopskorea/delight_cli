@@ -1,0 +1,24 @@
+# Configuration (Contains sensitive info)
+config.yml
+
+# Build artifacts
+*.obj
+*.o
+*.a
+*.lib
+_inline/
+blib/
+pm_to_blib
+MYMETA.*
+Makefile
+
+# Temporary/Debug files
+debug.json
+*.log
+*.tmp
+
+# OS/IDE
+.DS_Store
+.vscode/
+.idea/
+Thumbs.db
