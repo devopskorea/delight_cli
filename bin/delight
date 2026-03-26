@@ -2,12 +2,13 @@
 
 use strict;
 use warnings;
-use FindBin;
-use lib "$FindBin::Bin/../lib";
+# Installed via Makefile.PL, modules should be in @INC
 use Delight::Config;
 use Delight::Dooray;
 use Getopt::Long;
 use JSON::MaybeXS;
+use File::Spec;
+use File::HomeDir;
 
 # Ensure UTF-8 output for terminal
 use open qw(:std :utf8);
@@ -141,12 +142,13 @@ if ($command eq 'whoami') {
             my ($calendar_id, $max_results, $q);
             GetOptions(
                 "calendarId=s"  => \$calendar_id,
+                "calendar-id=s" => \$calendar_id,
                 "maxResults=i"  => \$max_results,
                 "q=s"           => \$q,
             );
-            $calendar_id ||= 'primary';
+            $calendar_id ||= $config->get('default_calendar_id') || 'primary';
             if ($calendar_id eq 'primary') {
-                $calendar_id = '*'; # Dooray wildcard for all calendars the user can see
+                $calendar_id = '*'; # Dooray wildcard
             }
             
             use POSIX qw(strftime);
@@ -156,6 +158,9 @@ if ($command eq 'whoami') {
             
             my $data = $dooray->list_events($start, $end, q => $q, maxResults => $max_results);
             foreach my $event (@{$data->{result}}) {
+                if ($calendar_id ne '*' && $event->{calendar}{id} ne $calendar_id) {
+                    next;
+                }
                 printf "%-25s | %-25s | %-25s | %s\n", $event->{id}, $event->{calendar}{id} || "unknown", $event->{startedAt} || "All Day", $event->{subject};
             }
         } elsif ($action eq 'get' || $action eq 'delete') {
@@ -182,6 +187,43 @@ if ($command eq 'whoami') {
                 $dooray->delete_event($calendar_id, $event_id);
                 print "Event deleted successfully.\n";
             }
+        } elsif ($action eq 'invite') {
+            my ($calendar_id, $event_id, $name);
+            GetOptions(
+                "calendarId=s" => \$calendar_id,
+                "eventId=s"    => \$event_id,
+                "name=s"       => \$name,
+            );
+            $event_id ||= shift @ARGV;
+            $name     ||= join(' ', @ARGV);
+            
+            die "Usage: delight calendar invite <eventId> <name>\n" unless $event_id && $name;
+
+            if (!$calendar_id || $calendar_id eq 'primary') {
+                $calendar_id = $dooray->get_default_calendar_id();
+            }
+
+            # 1. Search for member
+            my $search_res = $dooray->search_members($name);
+            my $members = $search_res->{result} || [];
+            die "Error: Member '$name' not found.\n" unless @$members;
+            
+            my $member = $members->[0]; # Take first match
+            print "Found member: $member->{name} ($member->{externalEmailAddress})\n";
+
+            # 2. Get current event to preserve data
+            my $event = $dooray->get_event($calendar_id, $event_id)->{result};
+            
+            # 3. Add to attendees
+            $event->{users} ||= { to => [] };
+            push @{$event->{users}{to}}, {
+                type   => 'member',
+                member => { organizationMemberId => $member->{id} }
+            };
+
+            # 4. Update
+            $dooray->update_event($calendar_id, $event_id, $event);
+            print "Successfully invited $member->{name} to event $event_id\n";
         }
     } elsif ($sub eq 'freebusy') {
         my $action = shift @ARGV;
@@ -236,7 +278,7 @@ if ($command eq 'whoami') {
     }
     
     # Common Drive Resolution
-    if ($sub eq 'files' || $sub eq '+upload') {
+    if ($sub eq 'files' || $sub eq '+upload' || ($command eq 'download' && $sub eq 'drive')) {
         unless ($drive_id) {
             if ($project_id) {
                 $drive_id = $dooray->get_drive_id_by_project_id($project_id);
@@ -259,32 +301,34 @@ if ($command eq 'whoami') {
         $drive_id ||= $dooray->get_private_drive_id();
     }
     
-    if ($upload_path) {
-        die "Error: File not found: $upload_path\n" unless -e $upload_path;
-        
-        if ($json_meta && !$name) {
-            my $context = join(' ', $json_meta, @ARGV);
-            $context =~ s/\\(["'])/$1/g;
-            if ($context =~ /name\W+([^"',}\s]+)/i) {
-                $name = $1;
+    if ($command eq 'drive') {
+        if ($upload_path) {
+            die "Error: File not found: $upload_path\n" unless -e $upload_path;
+            
+            if ($json_meta && !$name) {
+                my $context = join(' ', $json_meta, @ARGV);
+                $context =~ s/\\(["'])/$1/g;
+                if ($context =~ /name\W+([^"',}\s]+)/i) {
+                    $name = $1;
+                }
             }
+            $name ||= (File::Spec->splitpath($upload_path))[2];
+            
+            printf "Uploading $upload_path to Drive as '%s'...\n", $name;
+            my $result = $dooray->upload_file($drive_id, $upload_path, $name, $parent_id);
+            print "Uploaded successfully! File ID: " . $result->{result}{id} . "\n";
+        } elsif ($size) {
+            my $data = $dooray->list_files($drive_id, size => $size);
+            printf "%-25s | %-30s | %s\n", "ID", "Name", "Created At";
+            print "-" x 80 . "\n";
+            foreach my $file (@{$data->{result}}) {
+                printf "%-25s | %-30s | %s\n", $file->{id}, substr($file->{name}, 0, 30), $file->{createdAt};
+            }
+        } else {
+             print "Usage: delight drive files create --upload <path> [options]\n";
+             print "       delight drive files list --size <count> [options]\n";
+             print "       delight drive +upload <path>\n";
         }
-        $name ||= (File::Spec->splitpath($upload_path))[2];
-        
-        printf "Uploading $upload_path to Drive as '%s'...\n", $name;
-        my $result = $dooray->upload_file($drive_id, $upload_path, $name, $parent_id);
-        print "Uploaded successfully! File ID: " . $result->{result}{id} . "\n";
-    } elsif ($size) {
-        my $data = $dooray->list_files($drive_id, size => $size);
-        printf "%-25s | %-30s | %s\n", "ID", "Name", "Created At";
-        print "-" x 80 . "\n";
-        foreach my $file (@{$data->{result}}) {
-            printf "%-25s | %-30s | %s\n", $file->{id}, substr($file->{name}, 0, 30), $file->{createdAt};
-        }
-    } else {
-         print "Usage: delight drive files create --upload <path> [options]\n";
-         print "       delight drive files list --size <count> [options]\n";
-         print "       delight drive +upload <path>\n";
     }
 } elsif ($command eq 'post') {
     my $sub = shift @ARGV;
@@ -296,6 +340,408 @@ if ($command eq 'whoami') {
             printf "%-25s | %s\n", $post->{id}, $post->{subject};
         }
     }
+} elsif ($command eq 'download') {
+    my $sub = shift @ARGV;
+    my ($reset_cache, $with_attachments, $project_id, $wiki_id, $drive_id, $delay);
+    $delay = 20; # Ensure default is 20s as requested
+    GetOptions(
+        "reset-cache"      => \$reset_cache,
+        "with-attachments" => \$with_attachments,
+        "project-id=s"     => \$project_id,
+        "wiki-id=s"        => \$wiki_id,
+        "drive-id=s"       => \$drive_id,
+        "delay=i"          => \$delay,
+    );
+    
+    $project_id ||= $config->get('default_project_id');
+    $wiki_id    ||= $config->get('default_wiki_id');
+    $drive_id   ||= $config->get('default_drive_id');
+
+    $dooray->{delay} = $delay;
+    
+    use Fcntl;
+    use SDBM_File;
+    use File::Path qw(make_path);
+    use File::Spec;
+    
+    my $cache_file = '.delight_download_cache.sdbm';
+    if ($reset_cache) {
+        unlink "${cache_file}.dir" if -e "${cache_file}.dir";
+        unlink "${cache_file}.pag" if -e "${cache_file}.pag";
+        print "Cache reset.\n";
+    }
+    
+    my %cache;
+    tie(%cache, 'SDBM_File', $cache_file, O_RDWR|O_CREAT, 0640) or die "Could not open DB file: $!\n";
+    
+    my $base_dir = $config->get('download_dir') || File::Spec->catdir(File::HomeDir->my_home, 'delight');
+    
+    make_path($base_dir) unless -d $base_dir;
+    
+    my sub sanitize_filename {
+        my ($name) = @_;
+        $name =~ s/[\\\/:\*\?"<>\|]/_/g;
+        $name =~ s/^\s+//;
+        $name =~ s/\s+$//;
+        return $name || 'untitled';
+    }
+
+    my sub slugify {
+        my ($text) = @_;
+        $text = lc($text);
+        $text =~ s/[^a-z0-9\x{ac00}-\x{d7af}]+/-/gi; # Keep alphanumeric and Korean
+        $text =~ s/^-+|-+$//g;
+        return $text || 'page';
+    }
+
+    if ($sub eq 'tasks') {
+        my @projects;
+        if ($project_id) {
+            push @projects, { id => $project_id, code => $project_id };
+        } else {
+            my $res = $dooray->list_projects();
+            my $all_projects = $res->{result} || [];
+            
+            print "Available Projects:\n";
+            print "  [0] All Projects\n";
+            my $idx = 1;
+            foreach my $p (@$all_projects) {
+                my $desc = $p->{description} ? " - $p->{description}" : "";
+                printf "  [%d] %s%s\n", $idx++, $p->{code}, $desc;
+            }
+            
+            print "\nSelect a project to download (0-" . scalar(@$all_projects) . ") [0]: ";
+            my $sel = <STDIN>;
+            chomp $sel;
+            
+            if ($sel && $sel =~ /^\d+$/ && $sel > 0 && $sel <= scalar(@$all_projects)) {
+                push @projects, $all_projects->[$sel - 1];
+            } else {
+                @projects = @$all_projects;
+                print "Selected: All Projects\n";
+            }
+        }
+        
+        my $task_dir = File::Spec->catdir($base_dir, 'tasks');
+        make_path($task_dir) unless -d $task_dir;
+        
+        foreach my $proj (@projects) {
+            my $pid = $proj->{id};
+            print "Fetching tasks for project $pid...\n";
+            my $page = 0;
+            my $has_more = 1;
+            while ($has_more) {
+                my $res = eval { $dooray->list_posts_paginated($pid, $page, 100) };
+                if ($@ || !$res->{result}) {
+                    warn "Error fetching posts for $pid: $@\n";
+                    last;
+                }
+                my $posts = $res->{result} || [];
+                $has_more = @$posts == 100;
+                $page++;
+                
+                foreach my $p (@$posts) {
+                    my $post_id = $p->{id};
+                    if ($cache{"task_$post_id"}) {
+                        next;
+                    }
+                    
+                    print "Downloading task $post_id: $p->{subject}\n";
+                    my $detail = eval { $dooray->get_post_detail($pid, $post_id) };
+                    next if $@ || !$detail->{result};
+                    
+                    my $data = $detail->{result};
+                    my $format = ($data->{body}{mimeType} || '') eq 'text/html' ? 'html' : 'md';
+                    my $content = $data->{body}{content} || '';
+                    
+                    my $slug = slugify($data->{subject} || 'task');
+                    my $fname = "${post_id}-$slug.$format";
+                    my $fpath = File::Spec->catfile($task_dir, $fname);
+                    
+                    open my $fh, '>:utf8', $fpath or warn "Cannot write $fpath: $!";
+                    print $fh $content;
+                    close $fh;
+                    
+                    if ($delay) {
+                        my $rand_delay = int(rand(9)) + 2; # 2 to 10
+                        print "Waiting $rand_delay seconds after downloading...\n";
+                        sleep $rand_delay;
+                    }
+
+                    if ($with_attachments) {
+                        my $files_res = eval { $dooray->get_post_files($pid, $post_id) };
+                        if (!$@ && $files_res->{result} && @{$files_res->{result}}) {
+                            my $att_dir = File::Spec->catdir($task_dir, "${post_id}_attachments");
+                            make_path($att_dir);
+                            foreach my $f (@{$files_res->{result}}) {
+                                my $f_id = $f->{id};
+                                my $dl_url = $dooray->{domain} . "/project/v1/projects/$pid/posts/$post_id/files/$f_id?media=raw";
+                                my $f_save = File::Spec->catfile($att_dir, sanitize_filename($f->{name}));
+                                eval { $dooray->download_file($dl_url, $f_save) };
+                                if ($@) {
+                                    warn "Failed to download $f->{name}: $@\n";
+                                } else {
+                                    if ($delay) {
+                                        my $rand_delay = int(rand(9)) + 2;
+                                        print "Waiting $rand_delay seconds after downloading...\n";
+                                        sleep $rand_delay;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    $cache{"task_$post_id"} = 1;
+                }
+            }
+        }
+    } elsif ($sub eq 'wiki') {
+        my @wikis;
+        if ($wiki_id) {
+            push @wikis, { id => $wiki_id };
+        } elsif ($project_id) {
+            eval {
+                my $resolved_wiki_id = $dooray->get_wiki_id_by_project_id($project_id);
+                push @wikis, { id => $resolved_wiki_id };
+            };
+            if ($@) {
+                warn "Failed to resolve wiki-id from project-id $project_id: $@\n";
+            }
+        } else {
+            my $res = eval { $dooray->list_wikis() };
+            if (!$@ && $res->{result}) {
+                @wikis = @{$res->{result} || []};
+            } else {
+                warn "Failed to access wikis: $@\n";
+            }
+        }
+        
+        my $wiki_dir = File::Spec->catdir($base_dir, 'wiki');
+        make_path($wiki_dir) unless -d $wiki_dir;
+        
+        foreach my $w (@wikis) {
+            my $wid = $w->{id};
+            print "Fetching wiki pages for wiki $wid...\n";
+            my $page = 0;
+            my $has_more = 1;
+            while ($has_more) {
+                my $res = eval { $dooray->list_wiki_pages_paginated($wid, $page, 100) };
+                if ($@ || !$res->{result}) {
+                    warn "Error fetching wikis for $wid: $@\n";
+                    last;
+                }
+                my $pages = $res->{result} || [];
+                $has_more = @$pages == 100;
+                $page++;
+                
+                foreach my $p (@$pages) {
+                    my $page_id = $p->{id};
+                    if ($cache{"wiki_$page_id"}) {
+                        next;
+                    }
+                    
+                    print "Downloading wiki page $page_id: $p->{subject}\n";
+                    my $detail = eval { $dooray->get_wiki_page_detail($wid, $page_id) };
+                    next if $@ || !$detail->{result};
+                    
+                    my $data = $detail->{result};
+                    my $format = ($data->{body}{mimeType} || '') eq 'text/html' ? 'html' : 'md';
+                    my $content = $data->{body}{content} || '';
+                    
+                    my $slug = slugify($data->{subject} || 'page');
+                    my $fname = "${page_id}-$slug.$format";
+                    my $fpath = File::Spec->catfile($wiki_dir, $fname);
+                    
+                    open my $fh, '>:utf8', $fpath or warn "Cannot write $fpath: $!";
+                    print $fh $content;
+                    close $fh;
+
+                    if ($delay) {
+                        my $rand_delay = int(rand(9)) + 2;
+                        print "Waiting $rand_delay seconds after downloading...\n";
+                        sleep $rand_delay;
+                    }
+                    
+                    if ($with_attachments) {
+                        my $files_res = eval { $dooray->get_wiki_page_files($wid, $page_id) };
+                        if (!$@ && $files_res->{result} && @{$files_res->{result}}) {
+                            my $att_dir = File::Spec->catdir($wiki_dir, "${page_id}_attachments");
+                            make_path($att_dir);
+                            foreach my $f (@{$files_res->{result}}) {
+                                my $f_id = $f->{id} || $f->{attachFileId};
+                                next unless $f_id;
+                                my $dl_url = $dooray->{domain} . "/wiki/v1/wikis/$wid/pages/$page_id/files/$f_id";
+                                my $f_save = File::Spec->catfile($att_dir, sanitize_filename($f->{name} || $f_id));
+                                eval { $dooray->download_file($dl_url, $f_save) };
+                                if ($@) {
+                                    warn "Failed to download $f->{name}: $@\n";
+                                } else {
+                                    if ($delay) {
+                                        my $rand_delay = int(rand(9)) + 2;
+                                        print "Waiting $rand_delay seconds after downloading...\n";
+                                        sleep $rand_delay;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    $cache{"wiki_$page_id"} = 1;
+                }
+            }
+        }
+    } elsif ($sub eq 'drive') {
+        my @drives;
+        if ($drive_id) {
+            push @drives, { id => $drive_id };
+        } else {
+            my $res = eval { $dooray->list_drives() };
+            if (!$@ && $res->{result}) {
+                @drives = @{$res->{result}};
+            } else {
+                warn "Failed to access org drives, falling back to private drive.\n";
+                @drives = ( { id => eval { $dooray->get_private_drive_id() } } );
+            }
+        }
+        
+        my $drv_dir = File::Spec->catdir($base_dir, 'drive');
+        make_path($drv_dir) unless -d $drv_dir;
+        
+        foreach my $d (@drives) {
+            my $did = $d->{id};
+            next unless $did;
+            print "Fetching files for drive $did...\n";
+            my $page = 0;
+            my $has_more = 1;
+            while ($has_more) {
+                my $res = eval { $dooray->list_files($did, size => 100, page => $page, type => 'file') };
+                if ($@ || !$res->{result}) {
+                    warn "Error fetching files for drive $did: $@\n";
+                    last;
+                }
+                my $files = $res->{result} || [];
+                $has_more = @$files == 100;
+                $page++;
+                
+                foreach my $f (@$files) {
+                    my $file_id = $f->{id};
+                    if ($cache{"drive_$file_id"}) {
+                        next;
+                    }
+                    
+                    print "Downloading drive file $file_id: $f->{name}\n";
+                    my $dl_url = $dooray->{domain} . "/drive/v1/drives/$did/files/$file_id?media=raw";
+                    my $f_save = File::Spec->catfile($drv_dir, sanitize_filename($f->{name}) . "_$file_id");
+                    eval { $dooray->download_file($dl_url, $f_save) };
+                    if ($@) {
+                        warn "Failed to download $f->{name}: $@\n";
+                    } else {
+                        $cache{"drive_$file_id"} = 1;
+                        if ($delay) {
+                            my $rand_delay = int(rand(9)) + 2;
+                            print "Waiting $rand_delay seconds after downloading...\n";
+                            sleep $rand_delay;
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        print "Usage: delight download tasks|wiki|drive [--reset-cache] [--with-attachments] [--project-id <id>] [--wiki-id <id>] [--drive-id <id>]\n";
+    }
+    untie %cache;
+} elsif ($command eq 'upload') {
+    my $sub = shift @ARGV;
+    my ($reset_cache, $project_id, $wiki_id, $drive_id, $parent_id, $delay);
+    $delay = 1; # Default enable delay
+    GetOptions(
+        "reset-cache"  => \$reset_cache,
+        "project-id=s" => \$project_id,
+        "wiki-id=s"    => \$wiki_id,
+        "drive-id=s"   => \$drive_id,
+        "parent-id=s"  => \$parent_id,
+        "delay=i"      => \$delay,
+    );
+    
+    $project_id ||= $config->get('default_project_id');
+    $wiki_id    ||= $config->get('default_wiki_id');
+    $drive_id   ||= $config->get('default_drive_id');
+
+    use Fcntl;
+    use SDBM_File;
+    use File::Path qw(make_path);
+    use File::Spec;
+    
+    my $cache_file = '.delight_upload_cache.sdbm';
+    if ($reset_cache) {
+        unlink "${cache_file}.dir" if -e "${cache_file}.dir";
+        unlink "${cache_file}.pag" if -e "${cache_file}.pag";
+        print "Cache reset.\n";
+    }
+    
+    my %cache;
+    tie(%cache, 'SDBM_File', $cache_file, O_RDWR|O_CREAT, 0640) or die "Could not open DB file: $!\n";
+    
+    my $up_dir = $config->get('upload_dir') || File::Spec->catdir(File::HomeDir->my_home, 'delight_upload');
+    make_path($up_dir) unless -d $up_dir;
+
+    if ($sub eq 'drive') {
+        unless ($drive_id) {
+            if ($project_id) {
+                $drive_id = $dooray->get_drive_id_by_project_id($project_id);
+            } elsif ($wiki_id) {
+                $drive_id = $dooray->get_drive_id_by_wiki_id($wiki_id);
+            }
+        }
+        $drive_id ||= $dooray->get_private_drive_id();
+        
+        print "Syncing files from $up_dir to Drive $drive_id...\n";
+        
+        opendir my $dh, $up_dir or die "Cannot open $up_dir: $!";
+        my @files = sort grep { -f File::Spec->catfile($up_dir, $_) } readdir $dh;
+        closedir $dh;
+        
+        foreach my $filename (@files) {
+            my $fpath = File::Spec->catfile($up_dir, $filename);
+            my @st = stat($fpath);
+            my $mtime = $st[9];
+            my $size  = $st[7];
+            
+            my $cache_key = "${filename}_${size}_${mtime}";
+            if ($cache{$cache_key}) {
+                # print "Skipping $filename (already uploaded)\n";
+                next;
+            }
+            
+            my $existing_id = $dooray->find_file_by_name($drive_id, $filename, $parent_id);
+            
+            my $res;
+            if ($existing_id) {
+                print "Updating $filename (ID: $existing_id)...\n";
+                $res = eval { $dooray->update_file($drive_id, $existing_id, $fpath, $filename) };
+            } else {
+                print "Uploading $filename...\n";
+                $res = eval { $dooray->upload_file($drive_id, $fpath, $filename, $parent_id) };
+            }
+
+            if ($@) {
+                warn "Failed to upload/update $filename: $@\n";
+            } else {
+                my $new_id = $res->{result}{id};
+                $cache{$cache_key} = $new_id;
+                print "Sync $filename successfully (ID: $new_id)\n";
+                
+                if ($delay) {
+                    my $rand_delay = int(rand(9)) + 2; # 2 to 10
+                    print "Waiting $rand_delay seconds after uploading...\n";
+                    sleep $rand_delay;
+                }
+            }
+        }
+    } else {
+        print "Usage: delight upload drive [--reset-cache] [--project-id <id>] [--wiki-id <id>] [--drive-id <id>] [--parent-id <id>]\n";
+    }
+    untie %cache;
 } elsif ($command eq 'config') {
     my $key = shift @ARGV;
     my $val = shift @ARGV;

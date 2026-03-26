@@ -93,6 +93,18 @@ sub delete_event {
     return $self->request('DELETE', "/calendar/v1/calendars/$calendar_id/events/$event_id?deleteType=all");
 }
 
+sub update_event {
+    my ($self, $calendar_id, $event_id, $event_data) = @_;
+    return $self->request('PUT', "/calendar/v1/calendars/$calendar_id/events/$event_id", $event_data);
+}
+
+sub search_members {
+    my ($self, $name) = @_;
+    require URI::Escape;
+    my $escaped_name = URI::Escape::uri_escape($name);
+    return $self->request('GET', "/common/v1/members?name=$escaped_name");
+}
+
 sub query_freebusy {
     my ($self, $params) = @_;
     return $self->request('POST', "/calendar/v1/free-busy/query", $params);
@@ -187,4 +199,125 @@ sub upload_file {
     }
 }
 
+sub update_file {
+    my ($self, $drive_id, $file_id, $file_path, $name) = @_;
+    
+    require HTTP::Request::Common;
+    
+    # Transform domain: api.dooray.com -> file-api.dooray.com
+    my $file_api_domain = $self->{domain};
+    $file_api_domain =~ s/https:\/\/api\./https:\/\/file-api\./;
+    
+    # PUT /uploads/drive/v1/drives/{driveId}/files/{fileId}
+    my $url = "$file_api_domain/uploads/drive/v1/drives/$drive_id/files/$file_id";
+
+    my $type = guess_media_type($file_path);
+
+    my $req = HTTP::Request::Common::POST( # Dooray often uses POST with _method=PUT or just PUT for file uploads
+        $url,
+        'Authorization' => "dooray-api " . $self->{token},
+        Content_Type => 'multipart/form-data',
+        Content => [
+            file => [ $file_path, $name, 'Content-Type' => $type ],
+            name => $name,
+        ]
+    );
+    $req->method('PUT');
+
+    my $res = $self->{ua}->request($req);
+    
+    if ($res->is_success) {
+        return decode_json($res->content);
+    } else {
+        die "Update Error: " . $res->status_line . " " . $res->content . "\n";
+    }
+}
+
+sub find_file_by_name {
+    my ($self, $drive_id, $name, $parent_id) = @_;
+    $parent_id ||= $self->get_root_folder_id($drive_id);
+    
+    # We might need to paginate if there are many files, but for now search first 100
+    my $res = $self->request('GET', "/drive/v1/drives/$drive_id/files?parentId=$parent_id&size=100");
+    foreach my $file (@{$res->{result} || []}) {
+        if ($file->{name} eq $name) {
+            return $file->{id};
+        }
+    }
+    return undef;
+}
+
+sub list_wikis {
+    my ($self) = @_;
+    return $self->request('GET', '/wiki/v1/wikis');
+}
+
+sub list_drives {
+    my ($self) = @_;
+    return $self->request('GET', '/drive/v1/drives');
+}
+
+sub list_posts_paginated {
+    my ($self, $project_id, $page, $size) = @_;
+    $page ||= 0;
+    $size ||= 100;
+    return $self->request('GET', "/project/v1/projects/$project_id/posts?page=$page&size=$size");
+}
+
+sub get_post_detail {
+    my ($self, $project_id, $post_id) = @_;
+    return $self->request('GET', "/project/v1/projects/$project_id/posts/$post_id");
+}
+
+sub get_post_files {
+    my ($self, $project_id, $post_id) = @_;
+    return $self->request('GET', "/project/v1/projects/$project_id/posts/$post_id/files");
+}
+
+sub list_wiki_pages_paginated {
+    my ($self, $wiki_id, $page, $size) = @_;
+    $page ||= 0;
+    $size ||= 100;
+    return $self->request('GET', "/wiki/v1/wikis/$wiki_id/pages?page=$page&size=$size");
+}
+
+sub get_wiki_page_detail {
+    my ($self, $wiki_id, $page_id) = @_;
+    return $self->request('GET', "/wiki/v1/wikis/$wiki_id/pages/$page_id");
+}
+
+sub get_wiki_page_files {
+    my ($self, $wiki_id, $page_id) = @_;
+    return $self->request('GET', "/wiki/v1/wikis/$wiki_id/pages/$page_id/files");
+}
+
+sub download_file {
+    my ($self, $url, $save_path) = @_;
+    
+    use HTTP::Request;
+    my $req = HTTP::Request->new('GET' => $url);
+    $req->header('Authorization' => "dooray-api " . $self->{token});
+    
+    # Handle 307 redirects manually to preserve Authorization header
+    my $res = $self->{ua}->simple_request($req);
+    
+    while ($res->is_redirect) {
+        my $redirect_url = $res->header('Location');
+        $req = HTTP::Request->new('GET' => $redirect_url);
+        $req->header('Authorization' => "dooray-api " . $self->{token});
+        $res = $self->{ua}->simple_request($req);
+    }
+    
+    if ($res->is_success) {
+        open my $fh, '>', $save_path or die "Could not open $save_path: $!\n";
+        binmode $fh;
+        print $fh $res->content;
+        close $fh;
+        return 1;
+    } else {
+        die "Download Error from $url: " . $res->status_line . " " . $res->content . "\n";
+    }
+}
+
 1;
+

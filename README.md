@@ -1,153 +1,117 @@
-# Delight CLI
+# Delight CLI (Dooray! CLI 도구)
 
-Dooray를 이용하기 위한 CLI입니다.
-Google Workspace(GWS) CLI와 비슷합니다.
+Perl로 작성된 Dooray! (두레이) 전용 커맨드 라인 인터페이스(CLI) 도구입니다. 복잡한 웹 UI 대신 터미널에서 빠르고 효율적으로 두레이 기능을 사용할 수 있도록 설계되었습니다.
 
-## 제공과 제작
+## 🚀 주요 기능
+- **계정 확인**: `whoami`를 통한 연결 상태 및 내 정보 확인.
+- **프로젝트 및 업무**: 프로젝트 목록 조회 및 프로젝트 내 업무(Task) 리스트 확인.
+- **캘린더**: 일정 조회, 생성, 삭제 및 멤버 초대 (GWS 스타일의 `+agenda`, `+insert` 지원).
+- **드라이브**: 파일 업로드, 목록 조회 및 로컬 디렉토리와의 **단방향 동기화(One-way Sync)**.
+- **백업(Download)**: 업무, 위키, 드라이브 파일의 전체 로컬 백업 (증분 백업 지원).
 
-* "사회적협동조합 데브옵스 코리아"는 커뮤니티 "데브옵스 코리아"를 지원합니다.
-* "사회적협동조합 데브옵스 코리아"의 운영자들의 원활한 업무를 위해 "주식회사 시스템파이브"가 Delight CLI를 제작합니다.
-* "사회적협동조합 데브옵스 코리아"가 Delight CLI를 대중에게 제공합니다.
+## 📦 설치 및 설정
 
-## 주요 기능
-- `whoami`: Check your connection and member info.
-- `project list`: List all accessible projects.
-- `post list <project-id>`: List tasks/posts within a specific project.
-- `calendar +agenda`: Show today's calendar events.
-- `drive +upload <path>`: Upload a file to your private Dooray Drive.
-- GWS CLI가 제공하는 기능을 최대한 유사하게 제공하고자 합니다.
-- openclaw가 Delight CLI를 이용할 것을 고려하고 있습니다.
+1.  **의존성**: Perl이 설치되어 있어야 합니다 (Windows: Strawberry Perl, Linux/macOS: 기본 설치됨).
+2.  **설정**: `config.yml` (또는 `~/.delight.yml`) 파일을 생성합니다.
+    ```yaml
+    domain: https://api.dooray.com
+    token: YOUR_TOKEN_HERE
+    default_project_id: "3117440634317265196" # 자주 쓰는 프로젝트
+    default_calendar_id: "2418519835984710667" # 기본 캘린더
+    download_dir: /home/user/delight       # 백업 파일 저장 경로
+    upload_dir: /home/user/delight_upload # 동기화 업로드 소스 경로
+    ```
+    *토큰 발급: 두레이 웹 > 개인 설정 > API > 개인 인증 토큰.*
 
-## 설치
+3.  **설치**:
+    ```bash
+    perl Makefile.PL INSTALL_BASE=$HOME/.local
+    make install
+    ```
 
-* 유닉스, 리눅스, macOS에서 `Perl -I lib bin/delight`로 실행할 수 있습니다.
-  * `bin/delight`로도 실행할 수 있습니다. 
-* Microsoft Windows에서 delight.exe를 이용하세요.
-* 현재 디렉토리에 config.yml을 두거나 ~/.delight.yml 파일을 두세요.
+## 🛠️ 상세 사용 예시
 
-## 이용 예
+### 1. 프로젝트 및 업무 관리
+```bash
+# 접근 가능한 모든 프로젝트 목록과 ID 확인
+delight project list
 
-### 👤 Identity & Basic Info
-```powershell
-# Check who you are (name and email)
-delight.exe whoami
+# 특정 프로젝트의 업무 목록 확인 (최신순)
+delight post list <project-id>
+
+# 내 계정 정보 확인
+delight whoami
 ```
+
+### 2. 드라이브 (Drive) 작업
+```bash
+# 간단한 파일 업로드 (개인 드라이브)
+delight drive +upload test.txt
+
+# 특정 프로젝트 드라이브에 이름 지정해서 업로드
+delight drive files create --project-id <pid> --upload report.pdf --name "2026_보고서.pdf"
+
+# 드라이브 파일 목록 확인 (최근 5개)
+delight drive files list --size 5
+
+# 프로젝트 드라이브 파일 목록 확인
+delight drive files list --project-id <pid>
+```
+
+### 3. 드라이브 단방향 동기화 (Upload Sync)
+`upload_dir`에 있는 파일들을 두레이 드라이브로 동기화합니다. 파일이 변경되었거나 새로 생성된 경우에만 업로드하며, 기존 파일은 새 버전으로 업데이트합니다.
+```bash
+# 설정파일의 upload_dir 경로 파일을 프로젝트 드라이브로 동기화
+delight upload drive --project-id <pid>
+
+# 동기화 캐시를 무시하고 모든 파일 강제 재업로드
+delight upload drive --reset-cache
+```
+
+### 4. 캘린더 (Calendar) 일정 관리
+```bash
+# 오늘 일정만 보기
+delight calendar +agenda --today
+
+# 주간 일정 확인 (내일 포함 7일)
+delight calendar +agenda --week
+
+# 특정 날짜/시간에 일정 생성
+delight calendar +insert --summary "기획안 검토 회의" --start "2026-03-26T14:00:00+09:00"
+
+# 생성된 일정(ID: 123)에 동료 초대하기
+delight calendar invite 123 "조철현"
+
+# 일정 상세 정보 보기
+delight calendar events get --eventId <eventId>
+
+# 일정 삭제 (취소)
+delight calendar events delete --eventId <eventId> --calendarId <calendarId>
+```
+
+### 5. 데이터 백업 (Download)
+업무, 위키, 드라이브의 방대한 데이터를 로컬로 안전하게 내려받습니다.
+```bash
+# 프로젝트 위키의 모든 페이지를 마크다운 파일로 백업
+# (파일명 형식: {page-id}-{제목슬러그}.md)
+delight download wiki --project-id <pid>
+
+# 프로젝트의 모든 업무와 첨부파일까지 백업
+delight download tasks --project-id <pid> --with-attachments
+
+# 드라이브의 모든 파일 백업
+delight download drive --project-id <pid>
+```
+
+## ⚙️ 설정 항목 (config.yml) 상세
+| 항목 | 설명 | 기본값 |
+| :--- | :--- | :--- |
+| `token` | Dooray! API 개인 인증 토큰 (필수) | - |
+| `domain` | API 도메인 주소 | https://api.dooray.com |
+| `default_project_id` | 각종 명령에서 `--project-id` 생략 시 사용 | - |
+| `default_calendar_id` | 캘린더 명령에서 `--calendarId` 생략 시 사용 | primary |
+| `download_dir` | `download` 명령 실행 시 파일이 저장될 경로 | $HOME/delight |
+| `upload_dir` | `upload drive` 명령 실행 시 소스 디렉토리 경로 | $HOME/delight_upload |
 
 ---
-
-### 📂 Google Drive / Dooray! Files
-The [drive](cci:1://file:///c:/Users/ella/Documents/delight_cli/lib/Delight/Dooray.pm:100:0-107:1) command supports both simplified flags and GWS-style JSON parameters.
-
-#### **Creating/Uploading Files**
-```powershell
-# 1. Simple upload with automatic name extraction
-delight.exe drive files create report.pdf
-
-# 2. Upload with a specific remote name
-delight.exe drive files create --name "Final_Report.pdf" report.pdf
-
-# 3. GWS-style upload using JSON params
-delight.exe drive files create --params '{"name": "test.txt"}' test.txt
-
-# 4. Upload to a specific location (Project, Wiki, or fixed Drive ID)
-delight.exe drive files create --project-id 123456789 test.txt
-delight.exe drive files create --wiki-id 987654321 test.txt
-delight.exe drive files create --drive-id 1122334455 test.txt
-```
-
-#### **Listing Files**
-```powershell
-# 1. List recently uploaded files (default size 10)
-delight.exe drive files list
-
-# 2. List with specific result size
-delight.exe drive files list --size 5
-
-# 3. GWS-style listing with pageSize
-delight.exe drive files list --params '{"pageSize": 5}'
-
-# 4. List files from a specific project
-delight.exe drive files list --project-id 123456789
-```
-
----
-
-### 📅 Calendar Management
-Extensive support for GWS-style aliases and sophisticated parameters.
-
-#### **Viewing Agenda**
-```powershell
-# 1. Today's agenda
-delight.exe calendar +agenda --today
-
-# 2. This week's agenda
-delight.exe calendar +agenda --week
-
-# 3. Custom range (e.g., next 3 days)
-delight.exe calendar +agenda --days 3
-
-# 4. Specific timezone
-delight.exe calendar +agenda --timezone "America/New_York"
-```
-
-#### **Creating Events**
-```powershell
-# 1. Quick create with summary and start time
-delight.exe calendar +insert --summary "Team Sync" --start "2026-03-25T10:00:00+09:00"
-
-# 2. Create with duration (defaults to 1 hour if --end is omitted)
-delight.exe calendar +insert --summary "Deep Work" --start "2026-03-22T09:00:00+09:00"
-
-# 3. Create with attendee and location
-delight.exe calendar +insert --summary "lunch" --location "Subway" --attendee "ella@example.com"
-
-# 4. Natural Language expression (Quick Add)
-delight.exe calendar events quickAdd --text "Dinner at 7pm tomorrow at Italian Restaurant"
-```
-
-#### **Event Lifecycle**
-```powershell
-# 1. List events (default searches ±7 days)
-delight.exe calendar events list --maxResults 10
-
-# 2. Search events by keyword
-delight.exe calendar events list --q "Project"
-
-# 3. Get full details of a specific event
-delight.exe calendar events get --eventId <EVENT_ID>
-
-# 4. Delete an event
-delight.exe calendar events delete --eventId <EVENT_ID>
-```
-
-#### **Availability**
-```powershell
-# 1. Free/Busy query (requires JSON params)
-delight.exe calendar freebusy query --params '{"timeMin": "2026-03-25T00:00:00Z", "timeMax": "2026-03-25T23:59:59Z"}'
-```
-
----
-
-### 🏗️ Project & Wiki Discovery
-
-```powershell
-# List all accessible projects and their IDs
-delight.exe project list
-
-# List all accessible wikis and their IDs
-delight.exe wiki list
-```
-
-> [!TIP]
-> **PowerShell Tip**: Always use **single quotes** (`'`) for the entire JSON blob to avoid PowerShell's quote-escaping issues:
-> `delight.exe drive files create --params '{"name": "test.txt"}' test.txt`
-
-## Configuration
-
-Options in `config.yml`:
-- `token`: Your Dooray! API token.
-- `domain`: Your Dooray! API domain.  https://api.dooray.com or https://api.gov-dooray.com or https://api.dooray.co.kr
-- `default_project_id`: Default project ID for drive.
-- `default_wiki_id`: Default wiki ID for drive.
-- `default_drive_id`: Fixed drive ID.
-- `default_calendar_id`: Default calendar ID.
+**Tip**: API 요청 간 지연 시간(Delay)은 `download` 및 `upload` 작업 시 자동으로 랜덤하게(2~10초) 적용되어 서버 부하를 최소화합니다.

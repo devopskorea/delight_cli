@@ -16,6 +16,8 @@ Makefile
 debug.json
 *.log
 *.tmp
+*.sdbm.*
+downloads_*/
 
 # OS/IDE
 .DS_Store
