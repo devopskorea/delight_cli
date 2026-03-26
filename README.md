@@ -24,10 +24,15 @@ Perl로 작성된 Dooray! (두레이) 전용 커맨드 라인 인터페이스(CL
     *토큰 발급: 두레이 웹 > 개인 설정 > API > 개인 인증 토큰.*
 
 3.  **설치**:
-    ```bash
-    perl Makefile.PL INSTALL_BASE=$HOME/.local
-    make install
-    ```
+    *   **Perl 환경 사용**:
+        ```bash
+        perl Makefile.PL INSTALL_BASE=$HOME/.local
+        make install
+        ```
+    *   **실행 파일(Binary) 사용**: Perl 설치 없이 즉시 실행하려면 저장소에 포함된 바이너리 파일을 이용하세요.
+        *   **Linux**: `delight-linux-x64`
+        *   **Windows**: `delight.exe`
+        *   (Linux의 경우 `chmod +x delight-linux-x64`로 실행 권한을 부여해야 할 수 있습니다.)
 
 ## 🛠️ 상세 사용 예시
 
