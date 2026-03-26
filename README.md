@@ -16,8 +16,8 @@ Perl로 작성된 Dooray! (두레이) 전용 커맨드 라인 인터페이스(CL
     ```yaml
     domain: https://api.dooray.com
     token: YOUR_TOKEN_HERE
-    default_project_id: "3117440634317265196" # 자주 쓰는 프로젝트
-    default_calendar_id: "2418519835984710667" # 기본 캘린더
+    default_project_id: "YOUR_PROJECT_ID" # 자주 쓰는 프로젝트
+    default_calendar_id: "YOUR_CALENDAR_ID" # 기본 캘린더
     download_dir: /home/user/delight       # 백업 파일 저장 경로
     upload_dir: /home/user/delight_upload # 동기화 업로드 소스 경로
     ```
