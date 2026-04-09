@@ -1,5 +1,5 @@
 requires 'LWP::UserAgent';
-requires 'JSON::MaybeXS';
+requires 'JSON::XS';
 requires 'YAML::XS';
 requires 'Getopt::Long';
 requires 'File::HomeDir';

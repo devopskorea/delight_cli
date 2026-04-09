@@ -24,3 +24,7 @@ downloads_*/
 .vscode/
 .idea/
 Thumbs.db
+
+experiments
+commit_message.txt
+samples

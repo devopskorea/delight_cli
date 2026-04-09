@@ -6,13 +6,16 @@ use warnings;
 use Delight::Config;
 use Delight::Dooray;
 use Getopt::Long;
-use JSON::MaybeXS;
+use JSON::XS;
 use File::Spec;
 use File::HomeDir;
+use Encode qw(encode_utf8 decode_utf8);
 
-# Ensure UTF-8 output for terminal
+# Ensure UTF-8 for terminal and command-line arguments
 use open qw(:std :utf8);
 binmode STDOUT, ":utf8";
+@ARGV = map { decode_utf8($_) } @ARGV;
+binmode STDERR, ":utf8";
 
 my $config = Delight::Config->new();
 my $dooray = Delight::Dooray->new(
@@ -65,7 +68,7 @@ if ($command eq 'whoami') {
     } elsif ($sub eq 'events' || $sub eq '+insert' || $sub eq '+quickAdd') {
         my $action = ($sub eq '+insert') ? 'create' : (($sub eq '+quickAdd') ? 'create' : shift @ARGV);
         if ($action eq 'create' || $action eq 'insert' || $action eq 'quickAdd') {
-            my ($subject, $summary, $start, $end, $location, $calendar_id, $params_meta, $attendee, $text);
+            my ($subject, $summary, $start, $end, $location, $calendar_id, $params_meta, $attendee, $text, $busy);
             GetOptions(
                 "subject=s"     => \$subject,
                 "summary=s"     => \$summary,
@@ -77,6 +80,7 @@ if ($command eq 'whoami') {
                 "params=s"      => \$params_meta,
                 "attendee=s"    => \$attendee,
                 "text=s"        => \$text,
+                "busy!"         => \$busy,
             );
             $subject ||= $summary || $text || shift @ARGV;
             
@@ -134,6 +138,9 @@ if ($command eq 'whoami') {
                 startedAt => $start,
                 endedAt   => $end,
                 location  => $location || "",
+                personalSettings => {
+                    busy => (defined $busy && !$busy) ? JSON::XS::false : JSON::XS::true,
+                },
             };
             
             my $res = $dooray->create_event($calendar_id, $event_data);
@@ -163,19 +170,24 @@ if ($command eq 'whoami') {
                 }
                 printf "%-25s | %-25s | %-25s | %s\n", $event->{id}, $event->{calendar}{id} || "unknown", $event->{startedAt} || "All Day", $event->{subject};
             }
-        } elsif ($action eq 'get' || $action eq 'delete') {
-            my ($calendar_id, $event_id);
+        } elsif ($action eq 'get' || $action eq 'delete' || $action eq 'update') {
+            my ($calendar_id, $event_id, $summary, $start, $end, $location, $delete_type);
             GetOptions(
-                "calendarId=s" => \$calendar_id,
-                "eventId=s"    => \$event_id,
+                "calendarId=s"  => \$calendar_id,
+                "eventId=s"     => \$event_id,
+                "summary=s"     => \$summary,
+                "start=s"       => \$start,
+                "end=s"         => \$end,
+                "location=s"    => \$location,
+                "deleteType=s"  => \$delete_type,
             );
             $event_id ||= shift @ARGV;
             die "Usage: delight calendar events $action --eventId <id>\n" unless $event_id;
-            
+
             if (!$calendar_id || $calendar_id eq 'primary') {
                 $calendar_id = $dooray->get_default_calendar_id();
             }
-            
+
             if ($action eq 'get') {
                 my $res = $dooray->get_event($calendar_id, $event_id);
                 print "Event ID:    " . $res->{result}{id} . "\n";
@@ -183,9 +195,17 @@ if ($command eq 'whoami') {
                 print "Started At:  " . ($res->{result}{startedAt} || "N/A") . "\n";
                 print "Ended At:    " . ($res->{result}{endedAt} || "N/A") . "\n";
                 print "Location:    " . ($res->{result}{location} || "") . "\n";
-            } else {
-                $dooray->delete_event($calendar_id, $event_id);
+            } elsif ($action eq 'delete') {
+                $dooray->delete_event($calendar_id, $event_id, deleteType => $delete_type);
                 print "Event deleted successfully.\n";
+            } elsif ($action eq 'update') {
+                my $event = $dooray->get_event($calendar_id, $event_id)->{result};
+                $event->{subject}   = $summary  if defined $summary;
+                $event->{startedAt} = $start    if defined $start;
+                $event->{endedAt}   = $end      if defined $end;
+                $event->{location}  = $location if defined $location;
+                $dooray->update_event($calendar_id, $event_id, $event);
+                print "Event updated successfully.\n";
             }
         } elsif ($action eq 'invite') {
             my ($calendar_id, $event_id, $name);
@@ -233,9 +253,10 @@ if ($command eq 'whoami') {
             # Note: Dooray free-busy query might need translation from GWS style
             # For now, just pass through if it's JSON
             if ($params_meta) {
-                 my $res = $dooray->query_freebusy(decode_json($params_meta));
+                 my $json = JSON::XS->new->utf8->pretty;
+                 my $res = $dooray->query_freebusy($json->decode($params_meta));
                  print "Free-Busy Query result:\n";
-                 print encode_json($res) . "\n";
+                 print $json->encode($res) . "\n";
             }
         }
     }
@@ -330,6 +351,107 @@ if ($command eq 'whoami') {
              print "       delight drive +upload <path>\n";
         }
     }
+} elsif ($command eq 'page' || $command eq 'wiki') {
+    my $sub = shift @ARGV;
+    if ($sub eq 'create') {
+        my ($subject, $content, $wiki_id, $project_id, $parent_id);
+        GetOptions(
+            "subject=s"   => \$subject,
+            "content=s"   => \$content,
+            "wiki-id=s"   => \$wiki_id,
+            "project-id=s"=> \$project_id,
+            "parent-id=s" => \$parent_id,
+        );
+        $subject ||= shift @ARGV;
+        die "Usage: delight page create --subject <title> [--content <text>] [--parent-id <id>]\n" unless $subject;
+
+        unless ($wiki_id) {
+            if ($project_id) {
+                $wiki_id = $dooray->get_wiki_id_by_project_id($project_id);
+            } else {
+                $wiki_id = $config->get('default_wiki_id');
+                if (!$wiki_id && (my $def_proj = $config->get('default_project_id'))) {
+                    $wiki_id = $dooray->get_wiki_id_by_project_id($def_proj);
+                }
+            }
+        }
+        die "Error: wiki-id not found. Provide --wiki-id or configure default_wiki_id.\n" unless $wiki_id;
+
+        my $data = {
+            subject => $subject,
+            body => {
+                mimeType => "text/x-markdown",
+                content  => $content || "",
+            },
+        };
+        $data->{parentPageId} = $parent_id if $parent_id;
+
+        my $res = $dooray->create_wiki_page($wiki_id, $data);
+        print "Wiki page created successfully! ID: " . $res->{result}{id} . "\n";
+    } elsif ($sub eq 'update') {
+        my ($page_id, $subject, $content, $wiki_id, $project_id);
+        GetOptions(
+            "page-id=s"   => \$page_id,
+            "subject=s"   => \$subject,
+            "content=s"   => \$content,
+            "wiki-id=s"   => \$wiki_id,
+            "project-id=s"=> \$project_id,
+        );
+        $page_id ||= shift @ARGV;
+        die "Usage: delight page update --page-id <id> [--subject <title>] [--content <text>]\n" unless $page_id;
+
+        unless ($wiki_id) {
+            if ($project_id) {
+                $wiki_id = $dooray->get_wiki_id_by_project_id($project_id);
+            } else {
+                $wiki_id = $config->get('default_wiki_id');
+                if (!$wiki_id && (my $def_proj = $config->get('default_project_id'))) {
+                    $wiki_id = $dooray->get_wiki_id_by_project_id($def_proj);
+                }
+            }
+        }
+        die "Error: wiki-id not found. Provide --wiki-id or configure default_wiki_id.\n" unless $wiki_id;
+
+        unless ($subject) {
+            my $current = $dooray->get_wiki_page_detail($wiki_id, $page_id);
+            $subject = $current->{result}{subject};
+        }
+
+        my $data = { subject => $subject };
+        if (defined $content) {
+            $data->{body} = {
+                mimeType => "text/x-markdown",
+                content  => $content,
+            };
+        }
+
+        my $res = $dooray->update_wiki_page($wiki_id, $page_id, $data);
+        print "Wiki page updated successfully!\n";
+    } elsif ($sub eq 'delete') {
+        my ($page_id, $wiki_id, $project_id);
+        GetOptions(
+            "page-id=s"    => \$page_id,
+            "wiki-id=s"    => \$wiki_id,
+            "project-id=s" => \$project_id,
+        );
+        $page_id ||= shift @ARGV;
+        die "Usage: delight page delete --page-id <id>\n" unless $page_id;
+
+        unless ($wiki_id) {
+            if ($project_id) {
+                $wiki_id = $dooray->get_wiki_id_by_project_id($project_id);
+            } else {
+                $wiki_id = $config->get('default_wiki_id');
+                if (!$wiki_id && (my $def_proj = $config->get('default_project_id'))) {
+                    $wiki_id = $dooray->get_wiki_id_by_project_id($def_proj);
+                }
+            }
+        }
+        die "Error: wiki-id not found. Provide --wiki-id or configure default_wiki_id.\n" unless $wiki_id;
+
+        $dooray->delete_wiki_page($wiki_id, $page_id);
+        print "Wiki page deleted successfully!\n";
+    }
 } elsif ($command eq 'post') {
     my $sub = shift @ARGV;
     if ($sub eq 'list') {
@@ -342,7 +464,7 @@ if ($command eq 'whoami') {
     }
 } elsif ($command eq 'download') {
     my $sub = shift @ARGV;
-    my ($reset_cache, $with_attachments, $project_id, $wiki_id, $drive_id, $delay);
+    my ($reset_cache, $with_attachments, $project_id, $wiki_id, $drive_id, $delay, $page_id);
     $delay = 20; # Ensure default is 20s as requested
     GetOptions(
         "reset-cache"      => \$reset_cache,
@@ -351,6 +473,7 @@ if ($command eq 'whoami') {
         "wiki-id=s"        => \$wiki_id,
         "drive-id=s"       => \$drive_id,
         "delay=i"          => \$delay,
+        "page-id=s"        => \$page_id,
     );
     
     $project_id ||= $config->get('default_project_id');
@@ -516,79 +639,137 @@ if ($command eq 'whoami') {
             }
         }
         
-        my $wiki_dir = File::Spec->catdir($base_dir, 'wiki');
-        make_path($wiki_dir) unless -d $wiki_dir;
-        
+        my %wiki_tree;   # parent_id -> [child_id, ...]
+        my %page_titles; # id -> subject
+
         foreach my $w (@wikis) {
             my $wid = $w->{id};
-            print "Fetching wiki pages for wiki $wid...\n";
-            my $page = 0;
-            my $has_more = 1;
-            while ($has_more) {
-                my $res = eval { $dooray->list_wiki_pages_paginated($wid, $page, 100) };
-                if ($@ || !$res->{result}) {
-                    warn "Error fetching wikis for $wid: $@\n";
-                    last;
+            my $wiki_dir = File::Spec->catdir($base_dir, "wiki_$wid");
+            make_path($wiki_dir) unless -d $wiki_dir;
+            
+            if ($page_id) {
+                print "Downloading single wiki page $page_id from wiki $wid...\n";
+                my $detail = eval { $dooray->get_wiki_page_detail($wid, $page_id) };
+                if ($@ || !$detail->{result}) {
+                    warn "Error fetching wiki page $page_id: $@\n";
+                    next;
                 }
-                my $pages = $res->{result} || [];
-                $has_more = @$pages == 100;
-                $page++;
+                my $data = $detail->{result};
+                my $subject = $data->{subject} || 'No Title';
                 
-                foreach my $p (@$pages) {
-                    my $page_id = $p->{id};
-                    if ($cache{"wiki_$page_id"}) {
-                        next;
-                    }
-                    
-                    print "Downloading wiki page $page_id: $p->{subject}\n";
-                    my $detail = eval { $dooray->get_wiki_page_detail($wid, $page_id) };
-                    next if $@ || !$detail->{result};
-                    
-                    my $data = $detail->{result};
-                    my $format = ($data->{body}{mimeType} || '') eq 'text/html' ? 'html' : 'md';
-                    my $content = $data->{body}{content} || '';
-                    
-                    my $slug = slugify($data->{subject} || 'page');
-                    my $fname = "${page_id}-$slug.$format";
-                    my $fpath = File::Spec->catfile($wiki_dir, $fname);
-                    
-                    open my $fh, '>:utf8', $fpath or warn "Cannot write $fpath: $!";
-                    print $fh $content;
-                    close $fh;
+                my $format = ($data->{body}{mimeType} || '') eq 'text/html' ? 'html' : 'md';
+                my $content = $data->{body}{content} || '';
+                
+                my $fname = "${page_id}.$format";
+                my $fpath = File::Spec->catfile($wiki_dir, $fname);
+                
+                open my $fh, '>:utf8', $fpath or warn "Cannot write $fpath: $!";
+                print $fh $content;
+                close $fh;
+                print "Saved to $fpath\n";
+                next;
+            }
 
-                    if ($delay) {
-                        my $rand_delay = int(rand(9)) + 2;
-                        print "Waiting $rand_delay seconds after downloading...\n";
-                        sleep $rand_delay;
+            print "Fetching all wiki pages for wiki $wid...\n";
+            
+            my @parent_queue = (undef); # Start with root pages
+            while (@parent_queue) {
+                my $current_parent = shift @parent_queue;
+                my $page = 0;
+                my $has_more = 1;
+                while ($has_more) {
+                    my $res = eval { $dooray->list_wiki_pages_paginated($wid, $page, 100, parentPageId => $current_parent) };
+                    if ($@ || !$res->{result}) {
+                        warn "Error fetching wikis for $wid (parent: $current_parent): $@\n";
+                        last;
                     }
+                    my $pages = $res->{result} || [];
+                    $has_more = @$pages == 100;
+                    $page++;
                     
-                    if ($with_attachments) {
-                        my $files_res = eval { $dooray->get_wiki_page_files($wid, $page_id) };
-                        if (!$@ && $files_res->{result} && @{$files_res->{result}}) {
-                            my $att_dir = File::Spec->catdir($wiki_dir, "${page_id}_attachments");
-                            make_path($att_dir);
-                            foreach my $f (@{$files_res->{result}}) {
-                                my $f_id = $f->{id} || $f->{attachFileId};
-                                next unless $f_id;
-                                my $dl_url = $dooray->{domain} . "/wiki/v1/wikis/$wid/pages/$page_id/files/$f_id";
-                                my $f_save = File::Spec->catfile($att_dir, sanitize_filename($f->{name} || $f_id));
-                                eval { $dooray->download_file($dl_url, $f_save) };
-                                if ($@) {
-                                    warn "Failed to download $f->{name}: $@\n";
-                                } else {
-                                    if ($delay) {
-                                        my $rand_delay = int(rand(9)) + 2;
-                                        print "Waiting $rand_delay seconds after downloading...\n";
-                                        sleep $rand_delay;
+                    foreach my $p (@$pages) {
+                        my $page_id = $p->{id};
+                        my $subject = $p->{subject} || 'No Title';
+                        
+                        # Build tree structure
+                        my $pid_key = $current_parent || 'ROOT';
+                        push @{$wiki_tree{$pid_key}}, $page_id;
+                        $page_titles{$page_id} = $subject;
+
+                        # Add to queue to fetch its children later
+                        push @parent_queue, $page_id;
+
+                        if ($cache{"wiki_$page_id"}) {
+                            next;
+                        }
+                        
+                        print "Downloading wiki page $page_id: $subject\n";
+                        my $detail = eval { $dooray->get_wiki_page_detail($wid, $page_id) };
+                        next if $@ || !$detail->{result};
+                        
+                        my $data = $detail->{result};
+                        my $format = ($data->{body}{mimeType} || '') eq 'text/html' ? 'html' : 'md';
+                        my $content = $data->{body}{content} || '';
+                        
+                        my $fname = "${page_id}.$format";
+                        my $fpath = File::Spec->catfile($wiki_dir, $fname);
+                        
+                        open my $fh, '>:utf8', $fpath or warn "Cannot write $fpath: $!";
+                        print $fh $content;
+                        close $fh;
+
+                        if ($delay) {
+                            my $rand_delay = int(rand(9)) + 2;
+                            print "Waiting $rand_delay seconds after downloading...\n";
+                            sleep $rand_delay;
+                        }
+                        
+                        if ($with_attachments) {
+                            my $files_res = eval { $dooray->get_wiki_page_files($wid, $page_id) };
+                            if (!$@ && $files_res->{result} && @{$files_res->{result}}) {
+                                my $att_dir = File::Spec->catdir($wiki_dir, "${page_id}_attachments");
+                                make_path($att_dir);
+                                foreach my $f (@{$files_res->{result}}) {
+                                    my $f_id = $f->{id} || $f->{attachFileId};
+                                    next unless $f_id;
+                                    my $dl_url = $dooray->{domain} . "/wiki/v1/wikis/$wid/pages/$page_id/files/$f_id";
+                                    my $f_save = File::Spec->catfile($att_dir, sanitize_filename($f->{name} || $f_id));
+                                    eval { $dooray->download_file($dl_url, $f_save) };
+                                    if ($@) {
+                                        warn "Failed to download $f->{name}: $@\n";
+                                    } else {
+                                        if ($delay) {
+                                            my $rand_delay = int(rand(9)) + 2;
+                                            print "Waiting $rand_delay seconds after downloading...\n";
+                                            sleep $rand_delay;
+                                        }
                                     }
                                 }
                             }
                         }
+                        $cache{"wiki_$page_id"} = 1;
                     }
-                    
-                    $cache{"wiki_$page_id"} = 1;
                 }
             }
+
+            # Generate Hierarchy Map
+            my $map_path = File::Spec->catfile($base_dir, "WIKI_MAP_$wid.md");
+            open my $mfh, '>:utf8', $map_path or warn "Cannot write map $map_path: $!";
+            print $mfh "# Wiki Hierarchy Map ($wid)\n\n";
+
+            my $render_sub;
+            $render_sub = sub {
+                my ($pid, $depth) = @_;
+                foreach my $cid (@{$wiki_tree{$pid} || []}) {
+                    my $indent = "  " x $depth;
+                    my $bullet = ($depth == 0) ? "" : "- ";
+                    printf $mfh "%s%s%s (%s.md)\n", $indent, $bullet, $page_titles{$cid}, $cid;
+                    $render_sub->($cid, $depth + 1);
+                }
+            };
+            $render_sub->('ROOT', 0);
+            close $mfh;
+            print "Wiki map saved to $map_path\n";
         }
     } elsif ($sub eq 'drive') {
         my @drives;

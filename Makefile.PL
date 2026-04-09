@@ -14,7 +14,7 @@ WriteMakefile(
         'YAML::XS'            => 0,
         'File::HomeDir'       => 0,
         'LWP::UserAgent'      => 0,
-        'JSON::MaybeXS'       => 0,
+        'JSON::XS'             => 0,
         'LWP::MediaTypes'     => 0,
         'HTTP::Request'       => 0,
         'HTTP::Request::Common' => 0,
