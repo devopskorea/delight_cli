@@ -26,5 +26,8 @@ downloads_*/
 Thumbs.db
 
 experiments
+<<<<<<< HEAD
 commit_message.txt
 samples
+=======
+>>>>>>> 1ad4e1a8f2b0de13c9262bde01b48be4823356fd

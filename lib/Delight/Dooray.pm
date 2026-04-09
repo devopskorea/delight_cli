@@ -8,6 +8,7 @@ use HTTP::Request::Common;
 use JSON::XS;
 use LWP::MediaTypes qw(guess_media_type);
 use Encode;
+<<<<<<< HEAD
 use URI::Escape;
 
 # JSON::XS with utf8=>1:
@@ -17,6 +18,11 @@ my $JSON = JSON::XS->new->utf8;
 
 # Dooray API returns double-encoded UTF-8 for non-ASCII text.
 # After decode, strings contain UTF-8 byte values as Latin-1 codepoints.
+=======
+
+# Dooray API returns double-encoded UTF-8 for non-ASCII text.
+# After decode_json, strings contain UTF-8 byte values as Latin-1 codepoints.
+>>>>>>> 1ad4e1a8f2b0de13c9262bde01b48be4823356fd
 # This function decodes the second UTF-8 layer recursively.
 sub _fix_double_utf8 {
     my ($data) = @_;
@@ -24,16 +30,34 @@ sub _fix_double_utf8 {
         for my $key (keys %$data) {
             if (ref $data->{$key}) {
                 _fix_double_utf8($data->{$key});
+<<<<<<< HEAD
             } elsif (defined $data->{$key} && $data->{$key} =~ /[\xC2-\xF4][\x80-\xBF]/) {
                 eval { $data->{$key} = Encode::decode('UTF-8', $data->{$key}, Encode::FB_CROAK) };
+=======
+            } elsif (defined $data->{$key}) {
+                my $val = $data->{$key};
+                # Only fix strings that look like double-encoded UTF-8
+                # (contain bytes in C2-F4 range typical of UTF-8 lead bytes)
+                if ($val =~ /[\xC2-\xF4][\x80-\xBF]/) {
+                    eval { $data->{$key} = Encode::decode('UTF-8', $val, Encode::FB_CROAK) };
+                }
+>>>>>>> 1ad4e1a8f2b0de13c9262bde01b48be4823356fd
             }
         }
     } elsif (ref $data eq 'ARRAY') {
         for my $i (0 .. $#$data) {
             if (ref $data->[$i]) {
                 _fix_double_utf8($data->[$i]);
+<<<<<<< HEAD
             } elsif (defined $data->[$i] && $data->[$i] =~ /[\xC2-\xF4][\x80-\xBF]/) {
                 eval { $data->[$i] = Encode::decode('UTF-8', $data->[$i], Encode::FB_CROAK) };
+=======
+            } elsif (defined $data->[$i]) {
+                my $val = $data->[$i];
+                if ($val =~ /[\xC2-\xF4][\x80-\xBF]/) {
+                    eval { $data->[$i] = Encode::decode('UTF-8', $val, Encode::FB_CROAK) };
+                }
+>>>>>>> 1ad4e1a8f2b0de13c9262bde01b48be4823356fd
             }
         }
     }
@@ -41,10 +65,20 @@ sub _fix_double_utf8 {
 
 sub new {
     my ($class, %args) = @_;
+<<<<<<< HEAD
     return bless {
         ua     => LWP::UserAgent->new(),
         token  => $args{token},
         domain => $args{domain} || 'https://api.dooray.com',
+=======
+    my $json = JSON::MaybeXS->new(utf8 => 1);
+    my $self = bless {
+        ua    => LWP::UserAgent->new(),
+        token => $args{token},
+        domain => $args{domain} || 'https://api.dooray.com',
+        json  => $json,
+        %args
+>>>>>>> 1ad4e1a8f2b0de13c9262bde01b48be4823356fd
     }, $class;
 }
 
@@ -65,15 +99,27 @@ sub request {
 
     if ($params) {
         $req->header('Content-Type' => 'application/json');
+<<<<<<< HEAD
         $req->content($JSON->encode($params));
+=======
+        $req->content(JSON::MaybeXS::encode_json($params));
+>>>>>>> 1ad4e1a8f2b0de13c9262bde01b48be4823356fd
     }
 
     my $res = $self->{ua}->request($req);
 
     if ($res->is_success) {
+<<<<<<< HEAD
         my $content = $res->content;
         if ($content) {
             my $data = $JSON->decode($content);
+=======
+        my $content = $res->content;  # raw bytes from server
+        if ($content) {
+            # Dooray API returns double-encoded UTF-8: decode_json handles
+            # the first layer, then we fix the remaining UTF-8 byte sequences
+            my $data = JSON::MaybeXS::decode_json($content);
+>>>>>>> 1ad4e1a8f2b0de13c9262bde01b48be4823356fd
             _fix_double_utf8($data);
             return $data;
         }
@@ -258,9 +304,25 @@ sub create_wiki_page {
     $self->request('POST', "/wiki/v1/wikis/$wiki_id/pages", $data);
 }
 
+<<<<<<< HEAD
 sub update_wiki_page {
     my ($self, $wiki_id, $page_id, $data) = @_;
     $self->request('PUT', "/wiki/v1/wikis/$wiki_id/pages/$page_id", $data);
+=======
+sub create_wiki_page {
+    my ($self, $wiki_id, $data) = @_;
+    return $self->request('POST', "/wiki/v1/wikis/$wiki_id/pages", $data);
+}
+
+sub update_wiki_page {
+    my ($self, $wiki_id, $page_id, $data) = @_;
+    return $self->request('PUT', "/wiki/v1/wikis/$wiki_id/pages/$page_id", $data);
+}
+
+sub list_drives {
+    my ($self) = @_;
+    return $self->request('GET', '/drive/v1/drives');
+>>>>>>> 1ad4e1a8f2b0de13c9262bde01b48be4823356fd
 }
 
 sub delete_wiki_page {
@@ -274,7 +336,11 @@ sub list_wiki_pages_paginated {
     $size ||= 100;
     my $path = "/wiki/v1/wikis/$wiki_id/pages?page=$page&size=$size";
     $path .= "&parentPageId=" . $opts{parentPageId} if $opts{parentPageId};
+<<<<<<< HEAD
     $self->request('GET', $path);
+=======
+    return $self->request('GET', $path);
+>>>>>>> 1ad4e1a8f2b0de13c9262bde01b48be4823356fd
 }
 
 sub get_wiki_page_detail {
