@@ -54,7 +54,7 @@ delight whoami
 delight drive +upload test.txt
 
 # 특정 프로젝트 드라이브에 이름 지정해서 업로드
-delight drive files create --project-id <pid> --upload report.pdf --name "2026_report.pdf"
+delight drive files create --project-id <pid> --upload report.pdf --name "2026_보고서.pdf"
 
 # 드라이브 파일 목록 확인 (최근 5개)
 delight drive files list --size 5

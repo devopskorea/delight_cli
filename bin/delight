@@ -14,10 +14,7 @@ use Encode qw(encode_utf8 decode_utf8);
 # Ensure UTF-8 for terminal and command-line arguments
 use open qw(:std :utf8);
 binmode STDOUT, ":utf8";
-<<<<<<< HEAD
 @ARGV = map { decode_utf8($_) } @ARGV;
-=======
->>>>>>> 1ad4e1a8f2b0de13c9262bde01b48be4823356fd
 binmode STDERR, ":utf8";
 
 my $config = Delight::Config->new();
@@ -354,11 +351,7 @@ if ($command eq 'whoami') {
              print "       delight drive +upload <path>\n";
         }
     }
-<<<<<<< HEAD
 } elsif ($command eq 'page' || $command eq 'wiki') {
-=======
-} elsif ($command eq 'wiki') {
->>>>>>> 1ad4e1a8f2b0de13c9262bde01b48be4823356fd
     my $sub = shift @ARGV;
     if ($sub eq 'create') {
         my ($subject, $content, $wiki_id, $project_id, $parent_id);
@@ -370,11 +363,7 @@ if ($command eq 'whoami') {
             "parent-id=s" => \$parent_id,
         );
         $subject ||= shift @ARGV;
-<<<<<<< HEAD
         die "Usage: delight page create --subject <title> [--content <text>] [--parent-id <id>]\n" unless $subject;
-=======
-        die "Usage: delight wiki create --subject <title> [--content <text>] [--parent-id <id>]\n" unless $subject;
->>>>>>> 1ad4e1a8f2b0de13c9262bde01b48be4823356fd
 
         unless ($wiki_id) {
             if ($project_id) {
@@ -409,11 +398,7 @@ if ($command eq 'whoami') {
             "project-id=s"=> \$project_id,
         );
         $page_id ||= shift @ARGV;
-<<<<<<< HEAD
         die "Usage: delight page update --page-id <id> [--subject <title>] [--content <text>]\n" unless $page_id;
-=======
-        die "Usage: delight wiki update --page-id <id> [--subject <title>] [--content <text>]\n" unless $page_id;
->>>>>>> 1ad4e1a8f2b0de13c9262bde01b48be4823356fd
 
         unless ($wiki_id) {
             if ($project_id) {
@@ -427,17 +412,12 @@ if ($command eq 'whoami') {
         }
         die "Error: wiki-id not found. Provide --wiki-id or configure default_wiki_id.\n" unless $wiki_id;
 
-<<<<<<< HEAD
         unless ($subject) {
             my $current = $dooray->get_wiki_page_detail($wiki_id, $page_id);
             $subject = $current->{result}{subject};
         }
 
         my $data = { subject => $subject };
-=======
-        my $data = {};
-        $data->{subject} = $subject if $subject;
->>>>>>> 1ad4e1a8f2b0de13c9262bde01b48be4823356fd
         if (defined $content) {
             $data->{body} = {
                 mimeType => "text/x-markdown",
@@ -447,7 +427,6 @@ if ($command eq 'whoami') {
 
         my $res = $dooray->update_wiki_page($wiki_id, $page_id, $data);
         print "Wiki page updated successfully!\n";
-<<<<<<< HEAD
     } elsif ($sub eq 'delete') {
         my ($page_id, $wiki_id, $project_id);
         GetOptions(
@@ -472,8 +451,6 @@ if ($command eq 'whoami') {
 
         $dooray->delete_wiki_page($wiki_id, $page_id);
         print "Wiki page deleted successfully!\n";
-=======
->>>>>>> 1ad4e1a8f2b0de13c9262bde01b48be4823356fd
     }
 } elsif ($command eq 'post') {
     my $sub = shift @ARGV;
