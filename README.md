@@ -9,7 +9,7 @@ Perl로 작성된 Dooray! (두레이) 전용 커맨드 라인 인터페이스(CL
 - **캘린더**: 일정 조회, 생성, 수정, 삭제 및 멤버 초대 (GWS 스타일의 `+agenda`, `+insert` 지원)
 - **위키 페이지**: 위키 페이지 생성, 수정, 삭제
 - **드라이브**: 파일 업로드, 목록 조회 및 로컬 디렉토리와의 **단방향 동기화(One-way Sync)**
-- **백업(Download)**: 태스크, 위키, 드라이브 파일의 전체 로컬 백업 (증분 백업 지원)
+- **다운로드**: 태스크, 위키 페이지, 드라이브 파일의 로컬 다운로드 (증분 지원)
 
 ## 설치 및 설정
 
@@ -35,16 +35,16 @@ upload_dir: /home/user/delight_upload
 
 ### 설치 방법
 
-**Perl 환경 사용**:
+**실행 파일(Binary) 사용** (권장): Perl 설치 없이 즉시 실행할 수 있습니다.
+- **Linux**: `delight-linux-x64`
+- **Windows**: `delight.exe`
+- (Linux의 경우 `chmod +x delight-linux-x64`로 실행 권한을 부여해야 할 수 있습니다.)
+
+**Perl 환경 사용**: 바이너리가 없는 경우 Perl로 직접 실행할 수 있습니다.
 ```bash
 perl Makefile.PL INSTALL_BASE=$HOME/.local
 make install
 ```
-
-**실행 파일(Binary) 사용**: Perl 설치 없이 즉시 실행하려면 저장소에 포함된 바이너리 파일을 이용하세요.
-- **Linux**: `delight-linux-x64`
-- **Windows**: `delight.exe`
-- (Linux의 경우 `chmod +x delight-linux-x64`로 실행 권한을 부여해야 할 수 있습니다.)
 
 ## 명령어 레퍼런스
 
@@ -174,21 +174,19 @@ delight upload drive --project-id <pid>
 delight upload drive --reset-cache
 ```
 
-### 데이터 백업 (Download)
-
-업무, 위키, 드라이브의 방대한 데이터를 로컬로 안전하게 내려받습니다.
+### 다운로드 (Download)
 
 ```bash
-# 프로젝트 위키의 모든 페이지를 마크다운 파일로 백업
+# 위키 페이지 다운로드
 delight download wiki --project-id <pid>
 
-# 특정 위키 페이지 1개만 백업
+# 특정 위키 페이지 1개만 다운로드
 delight download wiki --page-id <pageId>
 
-# 프로젝트의 모든 업무와 첨부파일까지 백업
+# 태스크 다운로드 (첨부파일 포함)
 delight download tasks --project-id <pid> --with-attachments
 
-# 드라이브의 모든 파일 백업
+# 드라이브 파일 다운로드
 delight download drive --project-id <pid>
 
 # 캐시를 무시하고 전체 재다운로드
@@ -217,6 +215,5 @@ delight config <key> <value>
 ## 참고 사항
 
 - API 요청 간 지연 시간(Delay)은 `download` 및 `upload` 작업 시 자동으로 랜덤하게(2~10초) 적용되어 서버 부하를 최소화합니다. `--delay 0`으로 비활성화할 수 있습니다.
-- 위키 백업 시 페이지 계층 구조를 나타내는 `WIKI_MAP_<wiki-id>.md` 인덱스 파일이 자동 생성됩니다.
+- 위키 다운로드 시 페이지 계층 구조를 나타내는 `WIKI_MAP_<wiki-id>.md` 인덱스 파일이 자동 생성됩니다.
 - 위키 다운로드 파일은 `wiki_<wiki-id>/` 디렉토리에 저장됩니다 (다중 프로젝트 지원).
-- Dooray API는 한글 등 비ASCII 문자를 이중 인코딩(double-encoded UTF-8)으로 반환하는 알려진 이슈가 있으며, Delight CLI는 이를 자동으로 보정합니다.
