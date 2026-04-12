@@ -13,9 +13,18 @@ Perl로 작성된 Dooray! (두레이) 전용 커맨드 라인 인터페이스(CL
 
 ## 설치 및 설정
 
-### 의존성
+### 설치 방법
 
-Perl이 설치되어 있어야 합니다 (Windows: Strawberry Perl, Linux/macOS: 기본 설치됨).
+**실행 파일(Binary) 사용** (권장): Perl 설치 없이 즉시 실행할 수 있습니다.
+- **Linux**: `delight-linux-x64`
+- **Windows**: `delight.exe`
+- (Linux의 경우 `chmod +x delight-linux-x64`로 실행 권한을 부여해야 할 수 있습니다.)
+
+**Perl 환경 사용**: 바이너리가 없는 경우 Perl로 직접 실행할 수 있습니다.
+```bash
+perl Makefile.PL INSTALL_BASE=$HOME/.local
+make install
+```
 
 ### 설정
 
@@ -32,19 +41,6 @@ upload_dir: /home/user/delight_upload
 ```
 
 *토큰 발급: 두레이 웹 > 개인 설정 > API > 개인 인증 토큰.*
-
-### 설치 방법
-
-**실행 파일(Binary) 사용** (권장): Perl 설치 없이 즉시 실행할 수 있습니다.
-- **Linux**: `delight-linux-x64`
-- **Windows**: `delight.exe`
-- (Linux의 경우 `chmod +x delight-linux-x64`로 실행 권한을 부여해야 할 수 있습니다.)
-
-**Perl 환경 사용**: 바이너리가 없는 경우 Perl로 직접 실행할 수 있습니다.
-```bash
-perl Makefile.PL INSTALL_BASE=$HOME/.local
-make install
-```
 
 ## 명령어 레퍼런스
 
