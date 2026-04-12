@@ -68,7 +68,7 @@ if ($command eq 'whoami') {
     } elsif ($sub eq 'events' || $sub eq '+insert' || $sub eq '+quickAdd') {
         my $action = ($sub eq '+insert') ? 'create' : (($sub eq '+quickAdd') ? 'create' : shift @ARGV);
         if ($action eq 'create' || $action eq 'insert' || $action eq 'quickAdd') {
-            my ($subject, $summary, $start, $end, $location, $calendar_id, $params_meta, $attendee, $text, $busy);
+            my ($subject, $summary, $start, $end, $location, $calendar_id, $params_meta, @attendees, $text, $busy);
             GetOptions(
                 "subject=s"     => \$subject,
                 "summary=s"     => \$summary,
@@ -78,9 +78,10 @@ if ($command eq 'whoami') {
                 "calendarId=s"  => \$calendar_id,
                 "calendar-id=s" => \$calendar_id,
                 "params=s"      => \$params_meta,
-                "attendee=s"    => \$attendee,
+                "attendee=s"    => \@attendees,
                 "text=s"        => \$text,
-                "busy!"         => \$busy,
+                "busy"          => \$busy,
+                "public"        => \my $public,
             );
             $subject ||= $summary || $text || shift @ARGV;
             
@@ -131,18 +132,32 @@ if ($command eq 'whoami') {
                 $end   ||= strftime("%Y-%m-%dT%H:%M:%S+09:00", localtime($now + 7200));
             }
             
+            my @to_members = ({ type => 'member', member => { organizationMemberId => $dooray->whoami()->{result}{id} } });
+            for my $att (@attendees) {
+                my $search_res = ($att =~ /@/) ? $dooray->search_members_by_email($att) : $dooray->search_members($att);
+                my $members = $search_res->{result} || [];
+                if (@$members) {
+                    my $m = $members->[0];
+                    push @to_members, { type => 'member', member => { organizationMemberId => $m->{id} } };
+                    print "Attendee added: $m->{name}\n";
+                } else {
+                    warn "Warning: Member '$att' not found, skipped.\n";
+                }
+            }
+
             my $event_data = {
-                users => { to => [ { type => 'member', member => { organizationMemberId => $dooray->whoami()->{result}{id} } } ] },
-                subject => $subject,
-                body => { mimeType => "text/plain", content => "Created via Delight CLI" },
+                users     => { to => \@to_members },
+                subject   => $subject,
+                body      => { mimeType => "text/plain", content => "Created via Delight CLI" },
                 startedAt => $start,
                 endedAt   => $end,
                 location  => $location || "",
                 personalSettings => {
-                    busy => (defined $busy && !$busy) ? JSON::XS::false : JSON::XS::true,
+                    busy  => $busy ? JSON::XS::true : JSON::XS::false,
+                    class => $public ? "public" : "private",
                 },
             };
-            
+
             my $res = $dooray->create_event($calendar_id, $event_data);
             print "Event created successfully! ID: " . $res->{result}{id} . "\n";
         } elsif ($action eq 'list') {
@@ -427,6 +442,60 @@ if ($command eq 'whoami') {
 
         my $res = $dooray->update_wiki_page($wiki_id, $page_id, $data);
         print "Wiki page updated successfully!\n";
+    } elsif ($sub eq 'upload') {
+        my ($page_id, $wiki_id, $project_id, $file);
+        GetOptions(
+            "page-id=s"    => \$page_id,
+            "wiki-id=s"    => \$wiki_id,
+            "project-id=s" => \$project_id,
+            "file=s"       => \$file,
+        );
+        $page_id ||= shift @ARGV;
+        die "Usage: delight page upload --page-id <id> [--file <path>]\n" unless $page_id;
+
+        unless ($wiki_id) {
+            if ($project_id) {
+                $wiki_id = $dooray->get_wiki_id_by_project_id($project_id);
+            } else {
+                $wiki_id = $config->get('default_wiki_id');
+                if (!$wiki_id && (my $def_proj = $config->get('default_project_id'))) {
+                    $wiki_id = $dooray->get_wiki_id_by_project_id($def_proj);
+                }
+            }
+        }
+        die "Error: wiki-id not found. Provide --wiki-id or configure default_wiki_id.\n" unless $wiki_id;
+
+        unless ($file) {
+            my $base_dir = $config->get('download_dir') || File::Spec->catdir(File::HomeDir->my_home, 'delight');
+            $file = File::Spec->catfile($base_dir, "wiki_$wiki_id", "$page_id.md");
+        }
+        die "Error: File not found: $file\n" unless -f $file;
+
+        open my $fh, '<:encoding(UTF-8)', $file or die "Could not open $file: $!\n";
+        my $content = do { local $/; <$fh> };
+        close $fh;
+
+        my $current = $dooray->get_wiki_page_detail($wiki_id, $page_id);
+        my $subject = $current->{result}{subject};
+
+        $dooray->update_wiki_page($wiki_id, $page_id, {
+            subject => $subject,
+            body    => { mimeType => "text/x-markdown", content => $content },
+        });
+        print "Wiki page uploaded from $file\n";
+
+        # If file is outside download dir, download to canonical location
+        my $base_dir = $config->get('download_dir') || File::Spec->catdir(File::HomeDir->my_home, 'delight');
+        my $wiki_dir = File::Spec->catdir($base_dir, "wiki_$wiki_id");
+        my $canonical = File::Spec->catfile($wiki_dir, "$page_id.md");
+        if (File::Spec->rel2abs($file) ne File::Spec->rel2abs($canonical)) {
+            make_path($wiki_dir) unless -d $wiki_dir;
+            open my $out, '>:encoding(UTF-8)', $canonical or die "Could not open $canonical: $!\n";
+            print $out $content;
+            close $out;
+            print "Downloaded to $canonical\n";
+            print "Next time, edit and upload from: $canonical\n";
+        }
     } elsif ($sub eq 'delete') {
         my ($page_id, $wiki_id, $project_id);
         GetOptions(
@@ -449,18 +518,103 @@ if ($command eq 'whoami') {
         }
         die "Error: wiki-id not found. Provide --wiki-id or configure default_wiki_id.\n" unless $wiki_id;
 
-        $dooray->delete_wiki_page($wiki_id, $page_id);
-        print "Wiki page deleted successfully!\n";
+        my $current = $dooray->get_wiki_page_detail($wiki_id, $page_id);
+        my $result = $current->{result};
+        my $subject = $result->{subject};
+        $subject = "#TBD $subject" unless $subject =~ /^#TBD /;
+        $dooray->update_wiki_page($wiki_id, $page_id, {
+            subject => $subject,
+            body    => $result->{body},
+        });
+        print "Wiki page marked as deleted: $subject\n";
+    } elsif ($sub eq 'undelete') {
+        my ($page_id, $wiki_id, $project_id);
+        GetOptions(
+            "page-id=s"    => \$page_id,
+            "wiki-id=s"    => \$wiki_id,
+            "project-id=s" => \$project_id,
+        );
+        $page_id ||= shift @ARGV;
+        die "Usage: delight page undelete --page-id <id>\n" unless $page_id;
+
+        unless ($wiki_id) {
+            if ($project_id) {
+                $wiki_id = $dooray->get_wiki_id_by_project_id($project_id);
+            } else {
+                $wiki_id = $config->get('default_wiki_id');
+                if (!$wiki_id && (my $def_proj = $config->get('default_project_id'))) {
+                    $wiki_id = $dooray->get_wiki_id_by_project_id($def_proj);
+                }
+            }
+        }
+        die "Error: wiki-id not found. Provide --wiki-id or configure default_wiki_id.\n" unless $wiki_id;
+
+        my $current = $dooray->get_wiki_page_detail($wiki_id, $page_id);
+        my $result = $current->{result};
+        my $subject = $result->{subject};
+        $subject =~ s/^#TBD\s*//;
+        $dooray->update_wiki_page($wiki_id, $page_id, {
+            subject => $subject,
+            body    => $result->{body},
+        });
+        print "Wiki page undeleted: $subject\n";
+
+        # Download if local copy is not available
+        my $base_dir = $config->get('download_dir') || File::Spec->catdir(File::HomeDir->my_home, 'delight');
+        my $wiki_dir = File::Spec->catdir($base_dir, "wiki_$wiki_id");
+        my $fpath = File::Spec->catfile($wiki_dir, "$page_id.md");
+        unless (-f $fpath) {
+            make_path($wiki_dir) unless -d $wiki_dir;
+            my $body_content = $result->{body}{content} || '';
+            open my $fh, '>:encoding(UTF-8)', $fpath or die "Could not open $fpath: $!\n";
+            print $fh "# $subject\n\n$body_content\n";
+            close $fh;
+            print "Downloaded to $fpath\n";
+        }
     }
 } elsif ($command eq 'post') {
     my $sub = shift @ARGV;
-    if ($sub eq 'list') {
+    if ($sub eq 'create') {
+        my ($subject, $content, $project_id);
+        GetOptions(
+            "subject=s"    => \$subject,
+            "content=s"    => \$content,
+            "project-id=s" => \$project_id,
+        );
+        $subject ||= shift @ARGV;
+        die "Usage: delight post create --subject <title> [--content <text>] [--project-id <id>]\n" unless $subject;
+        $project_id ||= $config->get('default_project_id');
+        die "Error: project-id required. Provide --project-id or configure default_project_id.\n" unless $project_id;
+
+        my $data = {
+            subject => $subject,
+            body    => { mimeType => "text/x-markdown", content => $content || "" },
+        };
+        my $res = $dooray->create_post($project_id, $data);
+        print "Task created successfully! ID: " . $res->{result}{id} . "\n";
+    } elsif ($sub eq 'list') {
         my $project_id = shift @ARGV;
         die "Usage: delight post list <project-id>\n" unless $project_id;
         my $data = $dooray->list_posts($project_id);
         foreach my $post (@{$data->{result}}) {
             printf "%-25s | %s\n", $post->{id}, $post->{subject};
         }
+    } elsif ($sub eq 'delete') {
+        my ($post_id, $project_id);
+        GetOptions(
+            "post-id=s"    => \$post_id,
+            "project-id=s" => \$project_id,
+        );
+        $post_id ||= shift @ARGV;
+        die "Usage: delight post delete --post-id <id> [--project-id <id>]\n" unless $post_id;
+        $project_id ||= $config->get('default_project_id');
+        die "Error: project-id required. Provide --project-id or configure default_project_id.\n" unless $project_id;
+
+        my $current = $dooray->get_post_detail($project_id, $post_id);
+        my $subject = $current->{result}{subject};
+        $subject = "#TBD $subject" unless $subject =~ /^#TBD /;
+        $dooray->update_post($project_id, $post_id, { subject => $subject });
+        print "Task marked as deleted: $subject\n";
     }
 } elsif ($command eq 'download') {
     my $sub = shift @ARGV;

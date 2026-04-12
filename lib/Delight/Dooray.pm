@@ -93,6 +93,11 @@ sub search_members {
     $self->request('GET', "/common/v1/members?name=" . uri_escape($name));
 }
 
+sub search_members_by_email {
+    my ($self, $email) = @_;
+    $self->request('GET', "/common/v1/members?externalEmailAddresses=$email");
+}
+
 # --- Posts ---
 
 sub list_posts {
@@ -110,6 +115,16 @@ sub list_posts_paginated {
 sub get_post_detail {
     my ($self, $project_id, $post_id) = @_;
     $self->request('GET', "/project/v1/projects/$project_id/posts/$post_id");
+}
+
+sub create_post {
+    my ($self, $project_id, $data) = @_;
+    $self->request('POST', "/project/v1/projects/$project_id/posts", $data);
+}
+
+sub update_post {
+    my ($self, $project_id, $post_id, $data) = @_;
+    $self->request('PUT', "/project/v1/projects/$project_id/posts/$post_id", $data);
 }
 
 sub get_post_files {
@@ -263,10 +278,7 @@ sub update_wiki_page {
     $self->request('PUT', "/wiki/v1/wikis/$wiki_id/pages/$page_id", $data);
 }
 
-sub delete_wiki_page {
-    my ($self, $wiki_id, $page_id) = @_;
-    $self->request('DELETE', "/wiki/v1/wikis/$wiki_id/pages/$page_id", {});
-}
+
 
 sub list_wiki_pages_paginated {
     my ($self, $wiki_id, $page, $size, %opts) = @_;

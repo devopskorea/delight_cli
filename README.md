@@ -2,41 +2,61 @@
 
 Perl로 작성된 Dooray! (두레이) 전용 커맨드 라인 인터페이스(CLI) 도구입니다. 복잡한 웹 UI 대신 터미널에서 빠르고 효율적으로 두레이 기능을 사용할 수 있도록 설계되었습니다.
 
-## 🚀 주요 기능
-- **계정 확인**: `whoami`를 통한 연결 상태 및 내 정보 확인.
-- **프로젝트 및 업무**: 프로젝트 목록 조회 및 프로젝트 내 업무(Task) 리스트 확인.
-- **캘린더**: 일정 조회, 생성, 삭제 및 멤버 초대 (GWS 스타일의 `+agenda`, `+insert` 지원).
-- **드라이브**: 파일 업로드, 목록 조회 및 로컬 디렉토리와의 **단방향 동기화(One-way Sync)**.
-- **백업(Download)**: 업무, 위키, 드라이브 파일의 전체 로컬 백업 (증분 백업 지원).
+## 주요 기능
 
-## 📦 설치 및 설정
+- **계정 확인**: `whoami`를 통한 연결 상태 및 내 정보 확인
+- **프로젝트 및 업무**: 프로젝트 목록 조회, 업무(Task) 생성, 삭제 및 리스트 확인
+- **캘린더**: 일정 조회, 생성, 수정, 삭제 및 멤버 초대 (GWS 스타일의 `+agenda`, `+insert` 지원)
+- **위키 페이지**: 위키 페이지 생성, 수정, 삭제
+- **드라이브**: 파일 업로드, 목록 조회 및 로컬 디렉토리와의 **단방향 동기화(One-way Sync)**
+- **백업(Download)**: 업무, 위키, 드라이브 파일의 전체 로컬 백업 (증분 백업 지원)
 
-1.  **의존성**: Perl이 설치되어 있어야 합니다 (Windows: Strawberry Perl, Linux/macOS: 기본 설치됨).
-2.  **설정**: `config.yml` (또는 `~/.delight.yml`) 파일을 생성합니다.
-    ```yaml
-    domain: https://api.dooray.com
-    token: YOUR_TOKEN_HERE
-    default_project_id: "YOUR_PROJECT_ID" # 자주 쓰는 프로젝트
-    default_calendar_id: "YOUR_CALENDAR_ID" # 기본 캘린더
-    download_dir: /home/user/delight       # 백업 파일 저장 경로
-    upload_dir: /home/user/delight_upload # 동기화 업로드 소스 경로
-    ```
-    *토큰 발급: 두레이 웹 > 개인 설정 > API > 개인 인증 토큰.*
+## 설치 및 설정
 
-3.  **설치**:
-    *   **Perl 환경 사용**:
-        ```bash
-        perl Makefile.PL INSTALL_BASE=$HOME/.local
-        make install
-        ```
-    *   **실행 파일(Binary) 사용**: Perl 설치 없이 즉시 실행하려면 저장소에 포함된 바이너리 파일을 이용하세요.
-        *   **Linux**: `delight-linux-x64`
-        *   **Windows**: `delight.exe`
-        *   (Linux의 경우 `chmod +x delight-linux-x64`로 실행 권한을 부여해야 할 수 있습니다.)
+### 의존성
 
-## 🛠️ 상세 사용 예시
+Perl이 설치되어 있어야 합니다 (Windows: Strawberry Perl, Linux/macOS: 기본 설치됨).
 
-### 1. 프로젝트 및 업무 관리
+### 설정
+
+`config.yml` (또는 `~/.delight.yml`) 파일을 생성합니다.
+
+```yaml
+domain: https://api.dooray.com
+token: YOUR_TOKEN_HERE
+default_project_id: "YOUR_PROJECT_ID"
+default_wiki_id: "YOUR_WIKI_ID"
+default_calendar_id: "YOUR_CALENDAR_ID"
+download_dir: /home/user/delight
+upload_dir: /home/user/delight_upload
+```
+
+*토큰 발급: 두레이 웹 > 개인 설정 > API > 개인 인증 토큰.*
+
+### 설치 방법
+
+**Perl 환경 사용**:
+```bash
+perl Makefile.PL INSTALL_BASE=$HOME/.local
+make install
+```
+
+**실행 파일(Binary) 사용**: Perl 설치 없이 즉시 실행하려면 저장소에 포함된 바이너리 파일을 이용하세요.
+- **Linux**: `delight-linux-x64`
+- **Windows**: `delight.exe`
+- (Linux의 경우 `chmod +x delight-linux-x64`로 실행 권한을 부여해야 할 수 있습니다.)
+
+## 명령어 레퍼런스
+
+### 계정 확인
+
+```bash
+# 내 계정 정보 확인
+delight whoami
+```
+
+### 프로젝트 및 업무 관리
+
 ```bash
 # 접근 가능한 모든 프로젝트 목록과 ID 확인
 delight project list
@@ -44,11 +64,88 @@ delight project list
 # 특정 프로젝트의 업무 목록 확인 (최신순)
 delight post list <project-id>
 
-# 내 계정 정보 확인
-delight whoami
+# 업무 생성
+delight post create --subject "업무 제목" --content "업무 내용"
+delight post create --subject "업무 제목" --project-id <pid>
+
+# 업무 소프트 삭제 (제목에 #TBD 접두사 추가)
+delight post delete --post-id <postId>
+delight post delete --post-id <postId> --project-id <pid>
 ```
 
-### 2. 드라이브 (Drive) 작업
+### 캘린더 (Calendar) 일정 관리
+
+```bash
+# 오늘 일정만 보기
+delight calendar +agenda --today
+
+# 주간 일정 확인 (내일 포함 7일)
+delight calendar +agenda --week
+
+# 일정 목록 보기 (최근 ±7일)
+delight calendar events list
+
+# 일정 상세 정보 보기
+delight calendar events get --eventId <eventId>
+
+# 특정 날짜/시간에 일정 생성
+delight calendar +insert --summary "기획안 검토 회의" --start "2026-03-26T14:00:00+09:00"
+
+# 바쁨(busy) 상태로 일정 생성 (기본값: 한가함)
+delight calendar +insert --summary "중요 회의" --start "2026-04-10T14:00:00+09:00" --busy
+
+# 공개 일정으로 생성 (기본값: 비공개)
+delight calendar +insert --summary "공개 일정" --start "2026-04-10T14:00:00+09:00" --public
+
+# 일정 수정 (제목, 시간, 장소를 개별적으로 변경 가능)
+delight calendar events update --eventId <eventId> --summary "변경된 제목"
+delight calendar events update --eventId <eventId> --start "2026-04-10T14:00:00+09:00" --end "2026-04-10T15:00:00+09:00"
+delight calendar events update --eventId <eventId> --location "회의실 B"
+
+# 일정 삭제
+delight calendar events delete --eventId <eventId>
+
+# 반복 일정 삭제 (deleteType: this, wholeFromThis, whole)
+delight calendar events delete --eventId <eventId> --deleteType this
+
+# 일정 생성 시 동료 초대 (이름 또는 이메일)
+delight calendar +insert --summary "회의" --start "2026-03-26T14:00:00+09:00" --attendee "홍길동"
+delight calendar +insert --summary "회의" --start "2026-03-26T14:00:00+09:00" --attendee "user@example.com"
+delight calendar +insert --summary "회의" --start "2026-03-26T14:00:00+09:00" --attendee "홍길동" --attendee "user@example.com"
+```
+
+> `--attendee`는 이름과 이메일 주소를 모두 지원합니다. `@`가 포함되면 이메일로 검색합니다.
+
+### 위키 페이지 관리
+
+```bash
+# 위키 페이지 생성
+delight page create --subject "페이지 제목" --content "본문 내용"
+
+# 특정 페이지 하위에 생성
+delight page create --subject "하위 페이지" --content "내용" --parent-id <pageId>
+
+# 위키 페이지 수정 (--subject 생략 시 기존 제목 유지)
+delight page update --page-id <pageId> --content "수정된 내용"
+delight page update --page-id <pageId> --subject "새 제목" --content "수정된 내용"
+
+# 로컬 파일을 위키 페이지로 업로드 (다운로드 디렉토리에서 자동 탐색)
+delight page upload --page-id <pageId>
+
+# 외부 파일을 업로드 (업로드 후 다운로드 디렉토리에 자동 복사)
+delight page upload --page-id <pageId> --file /path/to/file.md
+
+# 위키 페이지 소프트 삭제 (제목에 #TBD 접두사 추가)
+delight page delete --page-id <pageId>
+
+# 위키 페이지 삭제 취소 (#TBD 접두사 제거, 로컬 사본 없으면 다운로드)
+delight page undelete --page-id <pageId>
+```
+
+> `delight wiki`도 `delight page`의 별칭으로 사용 가능합니다.
+
+### 드라이브 (Drive) 작업
+
 ```bash
 # 간단한 파일 업로드 (개인 드라이브)
 delight drive +upload test.txt
@@ -63,8 +160,10 @@ delight drive files list --size 5
 delight drive files list --project-id <pid>
 ```
 
-### 3. 드라이브 단방향 동기화 (Upload Sync)
+### 드라이브 단방향 동기화 (Upload Sync)
+
 `upload_dir`에 있는 파일들을 두레이 드라이브로 동기화합니다. 파일이 변경되었거나 새로 생성된 경우에만 업로드하며, 기존 파일은 새 버전으로 업데이트합니다.
+
 ```bash
 # 설정파일의 upload_dir 경로 파일을 프로젝트 드라이브로 동기화
 delight upload drive --project-id <pid>
@@ -73,50 +172,49 @@ delight upload drive --project-id <pid>
 delight upload drive --reset-cache
 ```
 
-### 4. 캘린더 (Calendar) 일정 관리
-```bash
-# 오늘 일정만 보기
-delight calendar +agenda --today
+### 데이터 백업 (Download)
 
-# 주간 일정 확인 (내일 포함 7일)
-delight calendar +agenda --week
-
-# 특정 날짜/시간에 일정 생성
-delight calendar +insert --summary "기획안 검토 회의" --start "2026-03-26T14:00:00+09:00"
-
-# 생성된 일정(ID: 123)에 동료 초대하기
-delight calendar invite 123 "조철현"
-
-# 일정 상세 정보 보기
-delight calendar events get --eventId <eventId>
-
-# 일정 삭제 (취소)
-delight calendar events delete --eventId <eventId> --calendarId <calendarId>
-```
-
-### 5. 데이터 백업 (Download)
 업무, 위키, 드라이브의 방대한 데이터를 로컬로 안전하게 내려받습니다.
+
 ```bash
 # 프로젝트 위키의 모든 페이지를 마크다운 파일로 백업
-# (파일명 형식: {page-id}-{제목슬러그}.md)
 delight download wiki --project-id <pid>
+
+# 특정 위키 페이지 1개만 백업
+delight download wiki --page-id <pageId>
 
 # 프로젝트의 모든 업무와 첨부파일까지 백업
 delight download tasks --project-id <pid> --with-attachments
 
 # 드라이브의 모든 파일 백업
 delight download drive --project-id <pid>
+
+# 캐시를 무시하고 전체 재다운로드
+delight download wiki --project-id <pid> --reset-cache
 ```
 
-## ⚙️ 설정 항목 (config.yml) 상세
+### 설정 관리
+
+```bash
+# 설정값 변경
+delight config <key> <value>
+```
+
+## 설정 항목 (config.yml) 상세
+
 | 항목 | 설명 | 기본값 |
 | :--- | :--- | :--- |
 | `token` | Dooray! API 개인 인증 토큰 (필수) | - |
-| `domain` | API 도메인 주소 | https://api.dooray.com |
+| `domain` | API 도메인 주소 | `https://api.dooray.com` |
 | `default_project_id` | 각종 명령에서 `--project-id` 생략 시 사용 | - |
-| `default_calendar_id` | 캘린더 명령에서 `--calendarId` 생략 시 사용 | primary |
-| `download_dir` | `download` 명령 실행 시 파일이 저장될 경로 | $HOME/delight |
-| `upload_dir` | `upload drive` 명령 실행 시 소스 디렉토리 경로 | $HOME/delight_upload |
+| `default_wiki_id` | 위키 명령에서 `--wiki-id` 생략 시 사용 | - |
+| `default_calendar_id` | 캘린더 명령에서 `--calendarId` 생략 시 사용 | `primary` |
+| `download_dir` | `download` 명령 실행 시 파일이 저장될 경로 | `$HOME/delight` |
+| `upload_dir` | `upload drive` 명령 실행 시 소스 디렉토리 경로 | `$HOME/delight_upload` |
 
----
-**Tip**: API 요청 간 지연 시간(Delay)은 `download` 및 `upload` 작업 시 자동으로 랜덤하게(2~10초) 적용되어 서버 부하를 최소화합니다.
+## 참고 사항
+
+- API 요청 간 지연 시간(Delay)은 `download` 및 `upload` 작업 시 자동으로 랜덤하게(2~10초) 적용되어 서버 부하를 최소화합니다. `--delay 0`으로 비활성화할 수 있습니다.
+- 위키 백업 시 페이지 계층 구조를 나타내는 `WIKI_MAP_<wiki-id>.md` 인덱스 파일이 자동 생성됩니다.
+- 위키 다운로드 파일은 `wiki_<wiki-id>/` 디렉토리에 저장됩니다 (다중 프로젝트 지원).
+- Dooray API는 한글 등 비ASCII 문자를 이중 인코딩(double-encoded UTF-8)으로 반환하는 알려진 이슈가 있으며, Delight CLI는 이를 자동으로 보정합니다.
