@@ -572,7 +572,7 @@ if ($command eq 'whoami') {
             print "Downloaded to $fpath\n";
         }
     }
-} elsif ($command eq 'post') {
+} elsif ($command eq 'task' || $command eq 'post') {
     my $sub = shift @ARGV;
     if ($sub eq 'create') {
         my ($subject, $content, $project_id);
@@ -582,7 +582,7 @@ if ($command eq 'whoami') {
             "project-id=s" => \$project_id,
         );
         $subject ||= shift @ARGV;
-        die "Usage: delight post create --subject <title> [--content <text>] [--project-id <id>]\n" unless $subject;
+        die "Usage: delight task create --subject <title> [--content <text>] [--project-id <id>]\n" unless $subject;
         $project_id ||= $config->get('default_project_id');
         die "Error: project-id required. Provide --project-id or configure default_project_id.\n" unless $project_id;
 
@@ -594,7 +594,7 @@ if ($command eq 'whoami') {
         print "Task created successfully! ID: " . $res->{result}{id} . "\n";
     } elsif ($sub eq 'list') {
         my $project_id = shift @ARGV;
-        die "Usage: delight post list <project-id>\n" unless $project_id;
+        die "Usage: delight task list <project-id>\n" unless $project_id;
         my $data = $dooray->list_posts($project_id);
         foreach my $post (@{$data->{result}}) {
             printf "%-25s | %s\n", $post->{id}, $post->{subject};
@@ -602,11 +602,12 @@ if ($command eq 'whoami') {
     } elsif ($sub eq 'delete') {
         my ($post_id, $project_id);
         GetOptions(
+            "task-id=s"    => \$post_id,
             "post-id=s"    => \$post_id,
             "project-id=s" => \$project_id,
         );
         $post_id ||= shift @ARGV;
-        die "Usage: delight post delete --post-id <id> [--project-id <id>]\n" unless $post_id;
+        die "Usage: delight task delete --task-id <id> [--project-id <id>]\n" unless $post_id;
         $project_id ||= $config->get('default_project_id');
         die "Error: project-id required. Provide --project-id or configure default_project_id.\n" unless $project_id;
 

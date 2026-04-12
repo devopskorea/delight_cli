@@ -5,11 +5,11 @@ Perl로 작성된 Dooray! (두레이) 전용 커맨드 라인 인터페이스(CL
 ## 주요 기능
 
 - **계정 확인**: `whoami`를 통한 연결 상태 및 내 정보 확인
-- **프로젝트 및 업무**: 프로젝트 목록 조회, 업무(Task) 생성, 삭제 및 리스트 확인
+- **프로젝트 및 태스크**: 프로젝트 목록 조회, 태스크 생성, 삭제 및 리스트 확인
 - **캘린더**: 일정 조회, 생성, 수정, 삭제 및 멤버 초대 (GWS 스타일의 `+agenda`, `+insert` 지원)
 - **위키 페이지**: 위키 페이지 생성, 수정, 삭제
 - **드라이브**: 파일 업로드, 목록 조회 및 로컬 디렉토리와의 **단방향 동기화(One-way Sync)**
-- **백업(Download)**: 업무, 위키, 드라이브 파일의 전체 로컬 백업 (증분 백업 지원)
+- **백업(Download)**: 태스크, 위키, 드라이브 파일의 전체 로컬 백업 (증분 백업 지원)
 
 ## 설치 및 설정
 
@@ -55,23 +55,25 @@ make install
 delight whoami
 ```
 
-### 프로젝트 및 업무 관리
+### 프로젝트 및 태스크 관리
 
 ```bash
 # 접근 가능한 모든 프로젝트 목록과 ID 확인
 delight project list
 
-# 특정 프로젝트의 업무 목록 확인 (최신순)
-delight post list <project-id>
+# 특정 프로젝트의 태스크 목록 확인 (최신순)
+delight task list <project-id>
 
-# 업무 생성
-delight post create --subject "업무 제목" --content "업무 내용"
-delight post create --subject "업무 제목" --project-id <pid>
+# 태스크 생성
+delight task create --subject "업무 제목" --content "업무 내용"
+delight task create --subject "업무 제목" --project-id <pid>
 
-# 업무 소프트 삭제 (제목에 #TBD 접두사 추가)
-delight post delete --post-id <postId>
-delight post delete --post-id <postId> --project-id <pid>
+# 태스크 소프트 삭제 (제목에 #TBD 접두사 추가)
+delight task delete --task-id <taskId>
+delight task delete --task-id <taskId> --project-id <pid>
 ```
+
+> `delight post`도 `delight task`의 별칭으로 사용 가능합니다.
 
 ### 캘린더 (Calendar) 일정 관리
 
