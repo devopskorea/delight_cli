@@ -52,6 +52,10 @@ delight whoami
 
 # 접근 가능한 모든 프로젝트 목록과 ID 확인
 delight project list
+
+# 프로젝트 설정 조회 (상태, 단계, 태그, 멤버)
+delight project settings
+delight project settings --project-id <pid>
 ```
 
 ### 위키 페이지 관리
