@@ -57,12 +57,25 @@ delight whoami
 # 접근 가능한 모든 프로젝트 목록과 ID 확인
 delight project list
 
-# 특정 프로젝트의 태스크 목록 확인 (최신순)
-delight task list <project-id>
+# 태스크 목록 확인 (기본 프로젝트)
+delight task list
+
+# 최근 5개만 확인
+delight task list --size 5
+
+# 특정 프로젝트의 태스크 목록 확인
+delight task list --project-id <pid>
 
 # 태스크 생성
 delight task create --subject "업무 제목" --content "업무 내용"
 delight task create --subject "업무 제목" --project-id <pid>
+
+# 태스크 다운로드
+delight task download --task-id <taskId>
+
+# 로컬 파일을 태스크로 업로드
+delight task upload --task-id <taskId>
+delight task upload --task-id <taskId> --file /path/to/file.md
 
 # 태스크 소프트 삭제 (제목에 #TBD 접두사 추가)
 delight task delete --task-id <taskId>

@@ -496,6 +496,42 @@ if ($command eq 'whoami') {
             print "Downloaded to $canonical\n";
             print "Next time, edit and upload from: $canonical\n";
         }
+    } elsif ($sub eq 'download') {
+        my ($page_id, $wiki_id, $project_id);
+        GetOptions(
+            "page-id=s"    => \$page_id,
+            "wiki-id=s"    => \$wiki_id,
+            "project-id=s" => \$project_id,
+        );
+        $page_id ||= shift @ARGV;
+        die "Usage: delight page download --page-id <id>\n" unless $page_id;
+
+        unless ($wiki_id) {
+            if ($project_id) {
+                $wiki_id = $dooray->get_wiki_id_by_project_id($project_id);
+            } else {
+                $wiki_id = $config->get('default_wiki_id');
+                if (!$wiki_id && (my $def_proj = $config->get('default_project_id'))) {
+                    $wiki_id = $dooray->get_wiki_id_by_project_id($def_proj);
+                }
+            }
+        }
+        die "Error: wiki-id not found. Provide --wiki-id or configure default_wiki_id.\n" unless $wiki_id;
+
+        my $detail = $dooray->get_wiki_page_detail($wiki_id, $page_id);
+        my $data = $detail->{result};
+        my $format = ($data->{body}{mimeType} || '') eq 'text/html' ? 'html' : 'md';
+        my $content = $data->{body}{content} || '';
+
+        my $base_dir = $config->get('download_dir') || File::Spec->catdir(File::HomeDir->my_home, 'delight');
+        my $wiki_dir = File::Spec->catdir($base_dir, "wiki_$wiki_id");
+        make_path($wiki_dir) unless -d $wiki_dir;
+
+        my $fpath = File::Spec->catfile($wiki_dir, "${page_id}.$format");
+        open my $fh, '>:utf8', $fpath or die "Cannot write $fpath: $!\n";
+        print $fh $content;
+        close $fh;
+        print "Saved to $fpath\n";
     } elsif ($sub eq 'delete') {
         my ($page_id, $wiki_id, $project_id);
         GetOptions(
@@ -593,9 +629,14 @@ if ($command eq 'whoami') {
         my $res = $dooray->create_post($project_id, $data);
         print "Task created successfully! ID: " . $res->{result}{id} . "\n";
     } elsif ($sub eq 'list') {
-        my $project_id = shift @ARGV;
-        die "Usage: delight task list <project-id>\n" unless $project_id;
-        my $data = $dooray->list_posts($project_id);
+        my ($project_id, $size);
+        GetOptions(
+            "project-id=s" => \$project_id,
+            "size=i"       => \$size,
+        );
+        $project_id ||= shift @ARGV || $config->get('default_project_id');
+        die "Usage: delight task list [--project-id <id>] [--size <n>]\n" unless $project_id;
+        my $data = $dooray->list_posts_paginated($project_id, 0, $size || 100);
         foreach my $post (@{$data->{result}}) {
             printf "%-25s | %s\n", $post->{id}, $post->{subject};
         }
@@ -616,6 +657,76 @@ if ($command eq 'whoami') {
         $subject = "#TBD $subject" unless $subject =~ /^#TBD /;
         $dooray->update_post($project_id, $post_id, { subject => $subject });
         print "Task marked as deleted: $subject\n";
+    } elsif ($sub eq 'download') {
+        my ($task_id, $project_id);
+        GetOptions(
+            "task-id=s"    => \$task_id,
+            "post-id=s"    => \$task_id,
+            "project-id=s" => \$project_id,
+        );
+        $task_id ||= shift @ARGV;
+        die "Usage: delight task download --task-id <id> [--project-id <id>]\n" unless $task_id;
+        $project_id ||= $config->get('default_project_id');
+        die "Error: project-id required. Provide --project-id or configure default_project_id.\n" unless $project_id;
+
+        my $detail = $dooray->get_post_detail($project_id, $task_id);
+        my $data = $detail->{result};
+        my $format = ($data->{body}{mimeType} || '') eq 'text/html' ? 'html' : 'md';
+        my $content = $data->{body}{content} || '';
+
+        my $base_dir = $config->get('download_dir') || File::Spec->catdir(File::HomeDir->my_home, 'delight');
+        my $task_dir = File::Spec->catdir($base_dir, "project_$project_id");
+        make_path($task_dir) unless -d $task_dir;
+
+        my $fpath = File::Spec->catfile($task_dir, "${task_id}.$format");
+        open my $fh, '>:utf8', $fpath or die "Cannot write $fpath: $!\n";
+        print $fh $content;
+        close $fh;
+        print "Saved to $fpath\n";
+    } elsif ($sub eq 'upload') {
+        my ($task_id, $project_id, $file);
+        GetOptions(
+            "task-id=s"    => \$task_id,
+            "post-id=s"    => \$task_id,
+            "project-id=s" => \$project_id,
+            "file=s"       => \$file,
+        );
+        $task_id ||= shift @ARGV;
+        die "Usage: delight task upload --task-id <id> [--file <path>] [--project-id <id>]\n" unless $task_id;
+        $project_id ||= $config->get('default_project_id');
+        die "Error: project-id required. Provide --project-id or configure default_project_id.\n" unless $project_id;
+
+        unless ($file) {
+            my $base_dir = $config->get('download_dir') || File::Spec->catdir(File::HomeDir->my_home, 'delight');
+            $file = File::Spec->catfile($base_dir, "project_$project_id", "$task_id.md");
+        }
+        die "Error: File not found: $file\n" unless -f $file;
+
+        open my $fh, '<:encoding(UTF-8)', $file or die "Could not open $file: $!\n";
+        my $content = do { local $/; <$fh> };
+        close $fh;
+
+        my $current = $dooray->get_post_detail($project_id, $task_id);
+        my $subject = $current->{result}{subject};
+
+        $dooray->update_post($project_id, $task_id, {
+            subject => $subject,
+            body    => { mimeType => "text/x-markdown", content => $content },
+        });
+        print "Task uploaded from $file\n";
+
+        # If file is outside download dir, copy to canonical location
+        my $base_dir = $config->get('download_dir') || File::Spec->catdir(File::HomeDir->my_home, 'delight');
+        my $task_dir = File::Spec->catdir($base_dir, "project_$project_id");
+        my $canonical = File::Spec->catfile($task_dir, "$task_id.md");
+        if (File::Spec->rel2abs($file) ne File::Spec->rel2abs($canonical)) {
+            make_path($task_dir) unless -d $task_dir;
+            open my $out, '>:encoding(UTF-8)', $canonical or die "Could not open $canonical: $!\n";
+            print $out $content;
+            close $out;
+            print "Downloaded to $canonical\n";
+            print "Next time, edit and upload from: $canonical\n";
+        }
     }
 } elsif ($command eq 'download') {
     my $sub = shift @ARGV;
@@ -700,11 +811,10 @@ if ($command eq 'whoami') {
             }
         }
         
-        my $task_dir = File::Spec->catdir($base_dir, 'tasks');
-        make_path($task_dir) unless -d $task_dir;
-        
         foreach my $proj (@projects) {
             my $pid = $proj->{id};
+            my $task_dir = File::Spec->catdir($base_dir, "project_$pid");
+            make_path($task_dir) unless -d $task_dir;
             print "Fetching tasks for project $pid...\n";
             my $page = 0;
             my $has_more = 1;
