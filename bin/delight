@@ -563,6 +563,17 @@ if ($command eq 'whoami') {
             body    => $result->{body},
         });
         print "Wiki page marked as deleted: $subject\n";
+
+        # Remove local copy if exists
+        my $base_dir = $config->get('download_dir') || File::Spec->catdir(File::HomeDir->my_home, 'delight');
+        my $wiki_dir = File::Spec->catdir($base_dir, "wiki_$wiki_id");
+        for my $ext ('md', 'html') {
+            my $fpath = File::Spec->catfile($wiki_dir, "$page_id.$ext");
+            if (-f $fpath) {
+                unlink $fpath;
+                print "Removed local copy: $fpath\n";
+            }
+        }
     } elsif ($sub eq 'undelete') {
         my ($page_id, $wiki_id, $project_id);
         GetOptions(
@@ -657,6 +668,47 @@ if ($command eq 'whoami') {
         $subject = "#TBD $subject" unless $subject =~ /^#TBD /;
         $dooray->update_post($project_id, $post_id, { subject => $subject });
         print "Task marked as deleted: $subject\n";
+
+        # Remove local copy if exists
+        my $base_dir = $config->get('download_dir') || File::Spec->catdir(File::HomeDir->my_home, 'delight');
+        my $task_dir = File::Spec->catdir($base_dir, "project_$project_id");
+        for my $ext ('md', 'html') {
+            my $fpath = File::Spec->catfile($task_dir, "$post_id.$ext");
+            if (-f $fpath) {
+                unlink $fpath;
+                print "Removed local copy: $fpath\n";
+            }
+        }
+    } elsif ($sub eq 'undelete') {
+        my ($post_id, $project_id);
+        GetOptions(
+            "task-id=s"    => \$post_id,
+            "post-id=s"    => \$post_id,
+            "project-id=s" => \$project_id,
+        );
+        $post_id ||= shift @ARGV;
+        die "Usage: delight task undelete --task-id <id> [--project-id <id>]\n" unless $post_id;
+        $project_id ||= $config->get('default_project_id');
+        die "Error: project-id required. Provide --project-id or configure default_project_id.\n" unless $project_id;
+
+        my $current = $dooray->get_post_detail($project_id, $post_id);
+        my $subject = $current->{result}{subject};
+        $subject =~ s/^#TBD\s*//;
+        $dooray->update_post($project_id, $post_id, { subject => $subject });
+        print "Task undeleted: $subject\n";
+
+        # Download if local copy is not available
+        my $base_dir = $config->get('download_dir') || File::Spec->catdir(File::HomeDir->my_home, 'delight');
+        my $task_dir = File::Spec->catdir($base_dir, "project_$project_id");
+        my $fpath = File::Spec->catfile($task_dir, "$post_id.md");
+        unless (-f $fpath) {
+            make_path($task_dir) unless -d $task_dir;
+            my $body_content = $current->{result}{body}{content} || '';
+            open my $fh, '>:encoding(UTF-8)', $fpath or die "Could not open $fpath: $!\n";
+            print $fh $body_content;
+            close $fh;
+            print "Downloaded to $fpath\n";
+        }
     } elsif ($sub eq 'download') {
         my ($task_id, $project_id);
         GetOptions(

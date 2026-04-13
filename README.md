@@ -49,14 +49,45 @@ upload_dir: /home/user/delight_upload
 ```bash
 # 내 계정 정보 확인
 delight whoami
-```
 
-### 프로젝트 및 태스크 관리
-
-```bash
 # 접근 가능한 모든 프로젝트 목록과 ID 확인
 delight project list
+```
 
+### 위키 페이지 관리
+
+```bash
+# 위키 페이지 생성
+delight page create --subject "페이지 제목" --content "본문 내용"
+
+# 특정 페이지 하위에 생성
+delight page create --subject "하위 페이지" --content "내용" --parent-id <pageId>
+
+# 위키 페이지 수정 (--subject 생략 시 기존 제목 유지)
+delight page update --page-id <pageId> --content "수정된 내용"
+delight page update --page-id <pageId> --subject "새 제목" --content "수정된 내용"
+
+# 위키 페이지 다운로드
+delight page download --page-id <pageId>
+
+# 로컬 파일을 위키 페이지로 업로드 (다운로드 디렉토리에서 자동 탐색)
+delight page upload --page-id <pageId>
+
+# 외부 파일을 업로드 (업로드 후 다운로드 디렉토리에 자동 복사)
+delight page upload --page-id <pageId> --file /path/to/file.md
+
+# 위키 페이지 소프트 삭제 (제목에 #TBD 접두사 추가)
+delight page delete --page-id <pageId>
+
+# 위키 페이지 삭제 취소 (#TBD 접두사 제거, 로컬 사본 없으면 다운로드)
+delight page undelete --page-id <pageId>
+```
+
+> `delight wiki`도 `delight page`의 별칭으로 사용 가능합니다.
+
+### 태스크 관리
+
+```bash
 # 태스크 목록 확인 (기본 프로젝트)
 delight task list
 
@@ -80,11 +111,14 @@ delight task upload --task-id <taskId> --file /path/to/file.md
 # 태스크 소프트 삭제 (제목에 #TBD 접두사 추가)
 delight task delete --task-id <taskId>
 delight task delete --task-id <taskId> --project-id <pid>
+
+# 태스크 삭제 취소 (#TBD 접두사 제거, 로컬 사본 없으면 다운로드)
+delight task undelete --task-id <taskId>
 ```
 
 > `delight post`도 `delight task`의 별칭으로 사용 가능합니다.
 
-### 캘린더 (Calendar) 일정 관리
+### 캘린더 일정 관리
 
 ```bash
 # 오늘 일정만 보기
@@ -126,34 +160,6 @@ delight calendar +insert --summary "회의" --start "2026-03-26T14:00:00+09:00" 
 ```
 
 > `--attendee`는 이름과 이메일 주소를 모두 지원합니다. `@`가 포함되면 이메일로 검색합니다.
-
-### 위키 페이지 관리
-
-```bash
-# 위키 페이지 생성
-delight page create --subject "페이지 제목" --content "본문 내용"
-
-# 특정 페이지 하위에 생성
-delight page create --subject "하위 페이지" --content "내용" --parent-id <pageId>
-
-# 위키 페이지 수정 (--subject 생략 시 기존 제목 유지)
-delight page update --page-id <pageId> --content "수정된 내용"
-delight page update --page-id <pageId> --subject "새 제목" --content "수정된 내용"
-
-# 로컬 파일을 위키 페이지로 업로드 (다운로드 디렉토리에서 자동 탐색)
-delight page upload --page-id <pageId>
-
-# 외부 파일을 업로드 (업로드 후 다운로드 디렉토리에 자동 복사)
-delight page upload --page-id <pageId> --file /path/to/file.md
-
-# 위키 페이지 소프트 삭제 (제목에 #TBD 접두사 추가)
-delight page delete --page-id <pageId>
-
-# 위키 페이지 삭제 취소 (#TBD 접두사 제거, 로컬 사본 없으면 다운로드)
-delight page undelete --page-id <pageId>
-```
-
-> `delight wiki`도 `delight page`의 별칭으로 사용 가능합니다.
 
 ### 드라이브 (Drive) 작업
 
