@@ -98,6 +98,38 @@ sub search_members_by_email {
     $self->request('GET', "/common/v1/members?externalEmailAddresses=$email");
 }
 
+# --- Project Settings ---
+
+sub list_workflows {
+    my ($self, $project_id) = @_;
+    $self->request('GET', "/project/v1/projects/$project_id/workflows");
+}
+
+sub list_milestones {
+    my ($self, $project_id) = @_;
+    $self->request('GET', "/project/v1/projects/$project_id/milestones");
+}
+
+sub list_tags {
+    my ($self, $project_id) = @_;
+    $self->request('GET', "/project/v1/projects/$project_id/tags");
+}
+
+sub list_project_members {
+    my ($self, $project_id) = @_;
+    $self->request('GET', "/project/v1/projects/$project_id/members");
+}
+
+sub set_post_done {
+    my ($self, $project_id, $post_id) = @_;
+    $self->request('POST', "/project/v1/projects/$project_id/posts/$post_id/set-done", {});
+}
+
+sub set_post_workflow {
+    my ($self, $project_id, $post_id, $workflow_id) = @_;
+    $self->request('POST', "/project/v1/projects/$project_id/posts/$post_id/set-workflow", { workflowId => $workflow_id });
+}
+
 # --- Posts ---
 
 sub list_posts {

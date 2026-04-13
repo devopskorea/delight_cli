@@ -39,6 +39,67 @@ if ($command eq 'whoami') {
         foreach my $p (@{$data->{result}}) {
             printf "%-25s | %s\n", $p->{id}, $p->{code};
         }
+    } elsif ($sub eq 'settings') {
+        my $project_id;
+        GetOptions("project-id=s" => \$project_id);
+        $project_id ||= shift @ARGV || $config->get('default_project_id');
+        die "Usage: delight project settings [--project-id <id>]\n" unless $project_id;
+
+        my $workflows = $dooray->list_workflows($project_id);
+        my $milestones = $dooray->list_milestones($project_id);
+        my $tags = $dooray->list_tags($project_id);
+        my $members = $dooray->list_project_members($project_id);
+
+        my $output = "# Project Settings ($project_id)\n\n";
+
+        $output .= "## Status (Workflows)\n\n";
+        $output .= sprintf "%-25s | %-15s | %s\n", "ID", "Class", "Name";
+        $output .= "-" x 60 . "\n";
+        for my $w (@{$workflows->{result} || []}) {
+            $output .= sprintf "%-25s | %-15s | %s\n", $w->{id}, $w->{class}, $w->{name};
+        }
+
+        $output .= "\n## Phases (Milestones)\n\n";
+        $output .= sprintf "%-25s | %-15s | %s\n", "ID", "Status", "Name";
+        $output .= "-" x 60 . "\n";
+        for my $m (@{$milestones->{result} || []}) {
+            $output .= sprintf "%-25s | %-15s | %s\n", $m->{id}, $m->{status} || '', $m->{name};
+        }
+
+        $output .= "\n## Tags\n\n";
+        $output .= sprintf "%-25s | %s\n", "ID", "Name";
+        $output .= "-" x 40 . "\n";
+        for my $t (@{$tags->{result} || []}) {
+            $output .= sprintf "%-25s | %s\n", $t->{id}, $t->{name};
+        }
+
+        $output .= "\n## Members\n\n";
+        $output .= sprintf "%-25s | %-15s | %s\n", "ID", "Role", "Name";
+        $output .= "-" x 60 . "\n";
+        for my $m (@{$members->{result} || []}) {
+            my $id = $m->{organizationMemberId} || '';
+            my $role = $m->{role} || '';
+            my $name = '';
+            if ($id) {
+                my $info = eval { $dooray->request('GET', "/common/v1/members/$id") };
+                $name = $info->{result}{name} || '' if $info;
+            }
+            $output .= sprintf "%-25s | %-15s | %s\n", $id, $role, $name;
+        }
+
+        print $output;
+
+        # Save to file
+        use File::Spec;
+        use File::Path qw(make_path);
+        my $base_dir = $config->get('download_dir') || File::Spec->catdir(File::HomeDir->my_home, 'delight');
+        my $proj_dir = File::Spec->catdir($base_dir, "project_$project_id");
+        make_path($proj_dir) unless -d $proj_dir;
+        my $fpath = File::Spec->catfile($proj_dir, "settings.md");
+        open my $fh, '>:encoding(UTF-8)', $fpath or die "Could not open $fpath: $!\n";
+        print $fh $output;
+        close $fh;
+        print "\nSaved to $fpath\n";
     }
 } elsif ($command eq 'calendar') {
     my $sub = shift @ARGV;

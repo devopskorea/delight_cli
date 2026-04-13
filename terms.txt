@@ -1,8 +1,3 @@
-## Goal
-
-You make delight_cli, a clone of GWS(Google Workspace) CLI which works with Dooray.
-
-
 ## Dooray API 용어 매핑
 
 | Dooray API | delight_cli 표현 |
@@ -11,6 +6,3 @@ You make delight_cli, a clone of GWS(Google Workspace) CLI which works with Door
 | workflow class | 상태 그룹 (status group) |
 | milestone | 단계 (phase) |
 | post | 태스크 (task) |
-
-## How
-
