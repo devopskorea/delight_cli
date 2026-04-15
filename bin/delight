@@ -9,7 +9,12 @@ use Getopt::Long;
 use JSON::XS;
 use File::Spec;
 use File::HomeDir;
+use File::Path qw(make_path);
 use Encode qw(encode_utf8 decode_utf8);
+use POSIX qw(strftime);
+use Time::Piece;
+use Fcntl;
+use SDBM_File;
 
 # Ensure UTF-8 for terminal and command-line arguments
 use open qw(:std :utf8);
@@ -25,8 +30,37 @@ my $dooray = Delight::Dooray->new(
 
 my $command = shift @ARGV || 'help';
 
-# Common variables for subcommands
-my ($json_meta, $params_meta, $upload_path, $name, $parent_id, $drive_id, $project_id, $wiki_id, $size);
+# --- Helpers ---
+
+sub base_dir {
+    $config->get('download_dir') || File::Spec->catdir(File::HomeDir->my_home, 'delight');
+}
+
+sub resolve_wiki_id {
+    my ($wiki_id, $page_id, $project_id) = @_;
+    return $wiki_id if $wiki_id;
+    if ($page_id) {
+        my $info = eval { $dooray->get_wiki_page($page_id) };
+        return $info->{result}{wikiId} if $info && $info->{result}{wikiId};
+    }
+    $wiki_id = $config->get('default_wiki_id');
+    return $wiki_id if $wiki_id;
+    $project_id ||= $config->get('default_project_id');
+    if ($project_id) {
+        return eval { $dooray->get_wiki_id_by_project_id($project_id) };
+    }
+    return undef;
+}
+
+sub resolve_project_id {
+    my ($project_id, $task_id) = @_;
+    return $project_id if $project_id;
+    if ($task_id) {
+        my $info = eval { $dooray->get_post($task_id) };
+        return $info->{result}{project}{id} if $info && $info->{result}{project};
+    }
+    return $config->get('default_project_id');
+}
 
 if ($command eq 'whoami') {
     my $data = $dooray->whoami();
@@ -90,9 +124,7 @@ if ($command eq 'whoami') {
         print $output;
 
         # Save to file
-        use File::Spec;
-        use File::Path qw(make_path);
-        my $base_dir = $config->get('download_dir') || File::Spec->catdir(File::HomeDir->my_home, 'delight');
+        my $base_dir = base_dir();
         my $proj_dir = File::Spec->catdir($base_dir, "project_$project_id");
         make_path($proj_dir) unless -d $proj_dir;
         my $fpath = File::Spec->catfile($proj_dir, "settings.md");
@@ -111,7 +143,7 @@ if ($command eq 'whoami') {
             "days=i"     => \$days,
             "timezone=s" => \$timezone,
         );
-        use POSIX qw(strftime);
+
         my $now = time;
         my $duration_days = 1;
         $duration_days = 7 if $week;
@@ -168,8 +200,8 @@ if ($command eq 'whoami') {
                 $calendar_id = $dooray->get_default_calendar_id();
             }
             
-            use POSIX qw(strftime);
-            use Time::Piece;
+    
+
             my $now = time;
             if ($start) {
                 if (!$end) {
@@ -234,7 +266,7 @@ if ($command eq 'whoami') {
                 $calendar_id = '*'; # Dooray wildcard
             }
             
-            use POSIX qw(strftime);
+    
             my $now = time;
             my $start = strftime("%Y-%m-%dT00:00:00+09:00", localtime($now - 7 * 86400)); # Last 7 days
             my $end   = strftime("%Y-%m-%dT23:59:59+09:00", localtime($now + 7 * 86400)); # Next 7 days
@@ -338,7 +370,8 @@ if ($command eq 'whoami') {
     }
 } elsif ($command eq 'drive') {
     my $sub = shift @ARGV;
-    
+    my ($json_meta, $params_meta, $upload_path, $name, $parent_id, $drive_id, $project_id, $wiki_id, $size);
+
     if ($sub eq 'files') {
         my $action = shift @ARGV;
         if ($action eq 'create') {
@@ -441,16 +474,7 @@ if ($command eq 'whoami') {
         $subject ||= shift @ARGV;
         die "Usage: delight page create --subject <title> [--content <text>] [--parent-id <id>]\n" unless $subject;
 
-        unless ($wiki_id) {
-            if ($project_id) {
-                $wiki_id = $dooray->get_wiki_id_by_project_id($project_id);
-            } else {
-                $wiki_id = $config->get('default_wiki_id');
-                if (!$wiki_id && (my $def_proj = $config->get('default_project_id'))) {
-                    $wiki_id = $dooray->get_wiki_id_by_project_id($def_proj);
-                }
-            }
-        }
+        $wiki_id = resolve_wiki_id($wiki_id, undef, $project_id);
         die "Error: wiki-id not found. Provide --wiki-id or configure default_wiki_id.\n" unless $wiki_id;
 
         my $data = {
@@ -476,16 +500,7 @@ if ($command eq 'whoami') {
         $page_id ||= shift @ARGV;
         die "Usage: delight page update --page-id <id> [--subject <title>] [--content <text>]\n" unless $page_id;
 
-        unless ($wiki_id) {
-            if ($project_id) {
-                $wiki_id = $dooray->get_wiki_id_by_project_id($project_id);
-            } else {
-                $wiki_id = $config->get('default_wiki_id');
-                if (!$wiki_id && (my $def_proj = $config->get('default_project_id'))) {
-                    $wiki_id = $dooray->get_wiki_id_by_project_id($def_proj);
-                }
-            }
-        }
+        $wiki_id = resolve_wiki_id($wiki_id, $page_id, $project_id);
         die "Error: wiki-id not found. Provide --wiki-id or configure default_wiki_id.\n" unless $wiki_id;
 
         unless ($subject) {
@@ -514,20 +529,11 @@ if ($command eq 'whoami') {
         $page_id ||= shift @ARGV;
         die "Usage: delight page upload --page-id <id> [--file <path>]\n" unless $page_id;
 
-        unless ($wiki_id) {
-            if ($project_id) {
-                $wiki_id = $dooray->get_wiki_id_by_project_id($project_id);
-            } else {
-                $wiki_id = $config->get('default_wiki_id');
-                if (!$wiki_id && (my $def_proj = $config->get('default_project_id'))) {
-                    $wiki_id = $dooray->get_wiki_id_by_project_id($def_proj);
-                }
-            }
-        }
+        $wiki_id = resolve_wiki_id($wiki_id, $page_id, $project_id);
         die "Error: wiki-id not found. Provide --wiki-id or configure default_wiki_id.\n" unless $wiki_id;
 
         unless ($file) {
-            my $base_dir = $config->get('download_dir') || File::Spec->catdir(File::HomeDir->my_home, 'delight');
+            my $base_dir = base_dir();
             $file = File::Spec->catfile($base_dir, "wiki_$wiki_id", "$page_id.md");
         }
         die "Error: File not found: $file\n" unless -f $file;
@@ -546,7 +552,7 @@ if ($command eq 'whoami') {
         print "Wiki page uploaded from $file\n";
 
         # If file is outside download dir, download to canonical location
-        my $base_dir = $config->get('download_dir') || File::Spec->catdir(File::HomeDir->my_home, 'delight');
+        my $base_dir = base_dir();
         my $wiki_dir = File::Spec->catdir($base_dir, "wiki_$wiki_id");
         my $canonical = File::Spec->catfile($wiki_dir, "$page_id.md");
         if (File::Spec->rel2abs($file) ne File::Spec->rel2abs($canonical)) {
@@ -567,16 +573,7 @@ if ($command eq 'whoami') {
         $page_id ||= shift @ARGV;
         die "Usage: delight page download --page-id <id>\n" unless $page_id;
 
-        unless ($wiki_id) {
-            if ($project_id) {
-                $wiki_id = $dooray->get_wiki_id_by_project_id($project_id);
-            } else {
-                $wiki_id = $config->get('default_wiki_id');
-                if (!$wiki_id && (my $def_proj = $config->get('default_project_id'))) {
-                    $wiki_id = $dooray->get_wiki_id_by_project_id($def_proj);
-                }
-            }
-        }
+        $wiki_id = resolve_wiki_id($wiki_id, $page_id, $project_id);
         die "Error: wiki-id not found. Provide --wiki-id or configure default_wiki_id.\n" unless $wiki_id;
 
         my $detail = $dooray->get_wiki_page_detail($wiki_id, $page_id);
@@ -584,7 +581,7 @@ if ($command eq 'whoami') {
         my $format = ($data->{body}{mimeType} || '') eq 'text/html' ? 'html' : 'md';
         my $content = $data->{body}{content} || '';
 
-        my $base_dir = $config->get('download_dir') || File::Spec->catdir(File::HomeDir->my_home, 'delight');
+        my $base_dir = base_dir();
         my $wiki_dir = File::Spec->catdir($base_dir, "wiki_$wiki_id");
         make_path($wiki_dir) unless -d $wiki_dir;
 
@@ -603,16 +600,7 @@ if ($command eq 'whoami') {
         $page_id ||= shift @ARGV;
         die "Usage: delight page delete --page-id <id>\n" unless $page_id;
 
-        unless ($wiki_id) {
-            if ($project_id) {
-                $wiki_id = $dooray->get_wiki_id_by_project_id($project_id);
-            } else {
-                $wiki_id = $config->get('default_wiki_id');
-                if (!$wiki_id && (my $def_proj = $config->get('default_project_id'))) {
-                    $wiki_id = $dooray->get_wiki_id_by_project_id($def_proj);
-                }
-            }
-        }
+        $wiki_id = resolve_wiki_id($wiki_id, $page_id, $project_id);
         die "Error: wiki-id not found. Provide --wiki-id or configure default_wiki_id.\n" unless $wiki_id;
 
         my $current = $dooray->get_wiki_page_detail($wiki_id, $page_id);
@@ -626,7 +614,7 @@ if ($command eq 'whoami') {
         print "Wiki page marked as deleted: $subject\n";
 
         # Remove local copy if exists
-        my $base_dir = $config->get('download_dir') || File::Spec->catdir(File::HomeDir->my_home, 'delight');
+        my $base_dir = base_dir();
         my $wiki_dir = File::Spec->catdir($base_dir, "wiki_$wiki_id");
         for my $ext ('md', 'html') {
             my $fpath = File::Spec->catfile($wiki_dir, "$page_id.$ext");
@@ -645,16 +633,7 @@ if ($command eq 'whoami') {
         $page_id ||= shift @ARGV;
         die "Usage: delight page undelete --page-id <id>\n" unless $page_id;
 
-        unless ($wiki_id) {
-            if ($project_id) {
-                $wiki_id = $dooray->get_wiki_id_by_project_id($project_id);
-            } else {
-                $wiki_id = $config->get('default_wiki_id');
-                if (!$wiki_id && (my $def_proj = $config->get('default_project_id'))) {
-                    $wiki_id = $dooray->get_wiki_id_by_project_id($def_proj);
-                }
-            }
-        }
+        $wiki_id = resolve_wiki_id($wiki_id, $page_id, $project_id);
         die "Error: wiki-id not found. Provide --wiki-id or configure default_wiki_id.\n" unless $wiki_id;
 
         my $current = $dooray->get_wiki_page_detail($wiki_id, $page_id);
@@ -668,7 +647,7 @@ if ($command eq 'whoami') {
         print "Wiki page undeleted: $subject\n";
 
         # Download if local copy is not available
-        my $base_dir = $config->get('download_dir') || File::Spec->catdir(File::HomeDir->my_home, 'delight');
+        my $base_dir = base_dir();
         my $wiki_dir = File::Spec->catdir($base_dir, "wiki_$wiki_id");
         my $fpath = File::Spec->catfile($wiki_dir, "$page_id.md");
         unless (-f $fpath) {
@@ -694,9 +673,11 @@ if ($command eq 'whoami') {
         $project_id ||= $config->get('default_project_id');
         die "Error: project-id required. Provide --project-id or configure default_project_id.\n" unless $project_id;
 
+        my $my_id = $dooray->whoami()->{result}{id};
         my $data = {
             subject => $subject,
             body    => { mimeType => "text/x-markdown", content => $content || "" },
+            users   => { to => [{ type => "member", member => { organizationMemberId => $my_id } }] },
         };
         my $res = $dooray->create_post($project_id, $data);
         print "Task created successfully! ID: " . $res->{result}{id} . "\n";
@@ -721,8 +702,8 @@ if ($command eq 'whoami') {
         );
         $post_id ||= shift @ARGV;
         die "Usage: delight task delete --task-id <id> [--project-id <id>]\n" unless $post_id;
-        $project_id ||= $config->get('default_project_id');
-        die "Error: project-id required. Provide --project-id or configure default_project_id.\n" unless $project_id;
+        $project_id = resolve_project_id($project_id, $post_id);
+        die "Error: project-id not found.\n" unless $project_id;
 
         my $current = $dooray->get_post_detail($project_id, $post_id);
         my $subject = $current->{result}{subject};
@@ -731,7 +712,7 @@ if ($command eq 'whoami') {
         print "Task marked as deleted: $subject\n";
 
         # Remove local copy if exists
-        my $base_dir = $config->get('download_dir') || File::Spec->catdir(File::HomeDir->my_home, 'delight');
+        my $base_dir = base_dir();
         my $task_dir = File::Spec->catdir($base_dir, "project_$project_id");
         for my $ext ('md', 'html') {
             my $fpath = File::Spec->catfile($task_dir, "$post_id.$ext");
@@ -749,8 +730,8 @@ if ($command eq 'whoami') {
         );
         $post_id ||= shift @ARGV;
         die "Usage: delight task undelete --task-id <id> [--project-id <id>]\n" unless $post_id;
-        $project_id ||= $config->get('default_project_id');
-        die "Error: project-id required. Provide --project-id or configure default_project_id.\n" unless $project_id;
+        $project_id = resolve_project_id($project_id, $post_id);
+        die "Error: project-id not found.\n" unless $project_id;
 
         my $current = $dooray->get_post_detail($project_id, $post_id);
         my $subject = $current->{result}{subject};
@@ -759,7 +740,7 @@ if ($command eq 'whoami') {
         print "Task undeleted: $subject\n";
 
         # Download if local copy is not available
-        my $base_dir = $config->get('download_dir') || File::Spec->catdir(File::HomeDir->my_home, 'delight');
+        my $base_dir = base_dir();
         my $task_dir = File::Spec->catdir($base_dir, "project_$project_id");
         my $fpath = File::Spec->catfile($task_dir, "$post_id.md");
         unless (-f $fpath) {
@@ -779,15 +760,15 @@ if ($command eq 'whoami') {
         );
         $task_id ||= shift @ARGV;
         die "Usage: delight task download --task-id <id> [--project-id <id>]\n" unless $task_id;
-        $project_id ||= $config->get('default_project_id');
-        die "Error: project-id required. Provide --project-id or configure default_project_id.\n" unless $project_id;
+        $project_id = resolve_project_id($project_id, $task_id);
+        die "Error: project-id not found.\n" unless $project_id;
 
         my $detail = $dooray->get_post_detail($project_id, $task_id);
         my $data = $detail->{result};
         my $format = ($data->{body}{mimeType} || '') eq 'text/html' ? 'html' : 'md';
         my $content = $data->{body}{content} || '';
 
-        my $base_dir = $config->get('download_dir') || File::Spec->catdir(File::HomeDir->my_home, 'delight');
+        my $base_dir = base_dir();
         my $task_dir = File::Spec->catdir($base_dir, "project_$project_id");
         make_path($task_dir) unless -d $task_dir;
 
@@ -806,11 +787,11 @@ if ($command eq 'whoami') {
         );
         $task_id ||= shift @ARGV;
         die "Usage: delight task upload --task-id <id> [--file <path>] [--project-id <id>]\n" unless $task_id;
-        $project_id ||= $config->get('default_project_id');
-        die "Error: project-id required. Provide --project-id or configure default_project_id.\n" unless $project_id;
+        $project_id = resolve_project_id($project_id, $task_id);
+        die "Error: project-id not found.\n" unless $project_id;
 
         unless ($file) {
-            my $base_dir = $config->get('download_dir') || File::Spec->catdir(File::HomeDir->my_home, 'delight');
+            my $base_dir = base_dir();
             $file = File::Spec->catfile($base_dir, "project_$project_id", "$task_id.md");
         }
         die "Error: File not found: $file\n" unless -f $file;
@@ -829,7 +810,7 @@ if ($command eq 'whoami') {
         print "Task uploaded from $file\n";
 
         # If file is outside download dir, copy to canonical location
-        my $base_dir = $config->get('download_dir') || File::Spec->catdir(File::HomeDir->my_home, 'delight');
+        my $base_dir = base_dir();
         my $task_dir = File::Spec->catdir($base_dir, "project_$project_id");
         my $canonical = File::Spec->catfile($task_dir, "$task_id.md");
         if (File::Spec->rel2abs($file) ne File::Spec->rel2abs($canonical)) {
@@ -860,12 +841,7 @@ if ($command eq 'whoami') {
     $drive_id   ||= $config->get('default_drive_id');
 
     $dooray->{delay} = $delay;
-    
-    use Fcntl;
-    use SDBM_File;
-    use File::Path qw(make_path);
-    use File::Spec;
-    
+
     my $cache_file = '.delight_download_cache.sdbm';
     if ($reset_cache) {
         unlink "${cache_file}.dir" if -e "${cache_file}.dir";
@@ -876,7 +852,7 @@ if ($command eq 'whoami') {
     my %cache;
     tie(%cache, 'SDBM_File', $cache_file, O_RDWR|O_CREAT, 0640) or die "Could not open DB file: $!\n";
     
-    my $base_dir = $config->get('download_dir') || File::Spec->catdir(File::HomeDir->my_home, 'delight');
+    my $base_dir = base_dir();
     
     make_path($base_dir) unless -d $base_dir;
     
@@ -1226,11 +1202,6 @@ if ($command eq 'whoami') {
     $wiki_id    ||= $config->get('default_wiki_id');
     $drive_id   ||= $config->get('default_drive_id');
 
-    use Fcntl;
-    use SDBM_File;
-    use File::Path qw(make_path);
-    use File::Spec;
-    
     my $cache_file = '.delight_upload_cache.sdbm';
     if ($reset_cache) {
         unlink "${cache_file}.dir" if -e "${cache_file}.dir";
@@ -1313,5 +1284,5 @@ if ($command eq 'whoami') {
     }
 } else {
     print "Usage: delight <command> [args]\n";
-    print "Commands: whoami, project list, post list <pid>, config <key> <val>\n";
+    print "Commands: whoami, project, calendar, drive, page, task, download, upload, config\n";
 }

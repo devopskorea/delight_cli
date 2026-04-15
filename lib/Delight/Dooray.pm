@@ -149,6 +149,11 @@ sub get_post_detail {
     $self->request('GET', "/project/v1/projects/$project_id/posts/$post_id");
 }
 
+sub get_post {
+    my ($self, $post_id) = @_;
+    $self->request('GET', "/project/v1/posts/$post_id");
+}
+
 sub create_post {
     my ($self, $project_id, $data) = @_;
     $self->request('POST', "/project/v1/projects/$project_id/posts", $data);
@@ -324,6 +329,11 @@ sub list_wiki_pages_paginated {
 sub get_wiki_page_detail {
     my ($self, $wiki_id, $page_id) = @_;
     $self->request('GET', "/wiki/v1/wikis/$wiki_id/pages/$page_id");
+}
+
+sub get_wiki_page {
+    my ($self, $page_id) = @_;
+    $self->request('GET', "/wiki/v1/pages/$page_id");
 }
 
 sub get_wiki_page_files {
