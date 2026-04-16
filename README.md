@@ -101,6 +101,14 @@ delight task list --size 5
 # 특정 프로젝트의 태스크 목록 확인
 delight task list --project-id <pid>
 
+# 표시 항목 선택 (기본: title,status)
+delight task list --fields title,assignee,duedate
+# 사용 가능: title, status, assignee, priority, duedate, tags, tasknumber
+
+# 태스크 개수 확인
+delight task count
+delight task count --phase "M000"
+
 # 태스크 생성
 delight task create --subject "업무 제목" --content "업무 내용"
 delight task create --subject "업무 제목" --project-id <pid>

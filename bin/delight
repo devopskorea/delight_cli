@@ -62,6 +62,40 @@ sub resolve_project_id {
     return $config->get('default_project_id');
 }
 
+sub _format_task {
+    my ($post, $fields) = @_;
+    my @parts = ($post->{id});
+    for my $f (@$fields) {
+        if ($f eq 'title') {
+            push @parts, $post->{subject} || '';
+        } elsif ($f eq 'status') {
+            push @parts, $post->{workflow}{name} || '';
+        } elsif ($f eq 'assignee') {
+            my @names;
+            for my $u (@{$post->{users}{to} || []}) {
+                if ($u->{type} eq 'member') {
+                    push @names, $u->{member}{name} || $u->{member}{organizationMemberId} || '';
+                } elsif ($u->{type} eq 'group') {
+                    for my $m (@{$u->{group}{members} || []}) {
+                        push @names, $m->{name} || $m->{organizationMemberId} || '';
+                    }
+                }
+            }
+            push @parts, join(', ', @names) || '';
+        } elsif ($f eq 'priority') {
+            push @parts, $post->{priority} || '';
+        } elsif ($f eq 'duedate') {
+            push @parts, $post->{dueDate} || '';
+        } elsif ($f eq 'tags') {
+            my @tag_names = map { $_->{name} || '' } @{$post->{tags} || []};
+            push @parts, join(', ', @tag_names) || '';
+        } elsif ($f eq 'tasknumber') {
+            push @parts, $post->{taskNumber} || '';
+        }
+    }
+    return join(' | ', @parts);
+}
+
 if ($command eq 'whoami') {
     my $data = $dooray->whoami();
     print "Name: " . $data->{result}{name} . "\n";
@@ -692,16 +726,61 @@ if ($command eq 'whoami') {
         my $res = $dooray->create_post($project_id, $data);
         print "Task created successfully! ID: " . $res->{result}{id} . "\n";
     } elsif ($sub eq 'list') {
-        my ($project_id, $size);
+        my ($project_id, $size, @fields);
         GetOptions(
             "project-id=s" => \$project_id,
             "size=i"       => \$size,
+            "fields=s"     => \@fields,
         );
+        @fields = split(/,/, join(',', @fields)) if @fields;
+        @fields = ('title', 'status') unless @fields;
         $project_id ||= shift @ARGV || $config->get('default_project_id');
-        die "Usage: delight task list [--project-id <id>] [--size <n>]\n" unless $project_id;
+        die "Usage: delight task list [--project-id <id>] [--size <n>] [--fields title,status,...]\n" unless $project_id;
         my $data = $dooray->list_posts_paginated($project_id, 0, $size || 100);
         foreach my $post (@{$data->{result}}) {
-            printf "%-25s | %s\n", $post->{id}, $post->{subject};
+            print _format_task($post, \@fields) . "\n";
+        }
+        print "Total: $data->{totalCount}\n";
+    } elsif ($sub eq 'count') {
+        my ($project_id, $phase, @fields);
+        GetOptions(
+            "project-id=s" => \$project_id,
+            "phase=s"      => \$phase,
+            "fields=s"     => \@fields,
+        );
+        @fields = split(/,/, join(',', @fields)) if @fields;
+        @fields = ('title', 'status') unless @fields;
+        $project_id ||= shift @ARGV || $config->get('default_project_id');
+        die "Usage: delight task count [--project-id <id>] [--phase <name>] [--fields title,status,...]\n" unless $project_id;
+
+        my $path = "/project/v1/projects/$project_id/posts?page=0&size=1";
+        if ($phase) {
+            my $milestones = $dooray->list_milestones($project_id)->{result} || [];
+            my $milestone_id;
+            for my $m (@$milestones) {
+                if ($m->{name} eq $phase) {
+                    $milestone_id = $m->{id};
+                    last;
+                }
+            }
+            die "Error: Phase '$phase' not found.\n" unless $milestone_id;
+            $path .= "&milestoneIds=$milestone_id";
+        }
+        my $data = $dooray->request('GET', $path);
+        my $label = $phase ? "Total tasks in phase '$phase'" : "Total tasks";
+        print "$label: $data->{totalCount}\n";
+
+        if ($phase) {
+            my $workflows = $dooray->list_workflows($project_id)->{result} || [];
+            for my $w (@$workflows) {
+                (my $list_path = $path) =~ s/size=1/size=100/;
+                my $wdata = $dooray->request('GET', "$list_path&workflowIds=$w->{id}");
+                my $count = $wdata->{totalCount} || 0;
+                printf "  %-10s: %s\n", $w->{name}, $count;
+                for my $post (@{$wdata->{result} || []}) {
+                    print "    " . _format_task($post, \@fields) . "\n";
+                }
+            }
         }
     } elsif ($sub eq 'tag') {
         my ($task_id, $project_id, @tags);
