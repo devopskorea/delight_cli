@@ -5,7 +5,7 @@ Perl로 작성된 Dooray! (두레이) 전용 커맨드 라인 인터페이스(CL
 ## 주요 기능
 
 - **계정 확인**: `whoami`를 통한 연결 상태 및 내 정보 확인
-- **프로젝트 및 태스크**: 프로젝트 목록 조회, 태스크 생성, 삭제 및 리스트 확인
+- **프로젝트 및 태스크**: 프로젝트 목록 조회, 태스크 생성/삭제/상태변경/담당자지정/태그/만기일 설정
 - **캘린더**: 일정 조회, 생성, 수정, 삭제 및 멤버 초대 (GWS 스타일의 `+agenda`, `+insert` 지원)
 - **위키 페이지**: 위키 페이지 생성, 수정, 삭제
 - **드라이브**: 파일 업로드, 목록 조회 및 로컬 디렉토리와의 **단방향 동기화(One-way Sync)**
@@ -118,6 +118,27 @@ delight task delete --task-id <taskId> --project-id <pid>
 
 # 태스크 삭제 취소 (#TBD 접두사 제거, 로컬 사본 없으면 다운로드)
 delight task undelete --task-id <taskId>
+
+# 태스크 상태 변경
+delight task status --task-id <taskId> --status "진행"
+delight task status --task-id <taskId> --done
+
+# 태스크 담당자 지정 (미입력 시 나를 담당자로 지정)
+delight task assign --task-id <taskId>
+delight task assign --task-id <taskId> --assignee "홍길동"
+delight task assign --task-id <taskId> --assignee "user@example.com"
+
+# 태스크 단계 변경
+delight task phase --task-id <taskId> --phase "M000"
+
+# 태스크 만기일 설정
+delight task duedate --task-id <taskId> --today
+delight task duedate --task-id <taskId> --tomorrow
+delight task duedate --task-id <taskId> --date 2026-04-20
+
+# 태스크 태그 지정
+delight task tag --task-id <taskId> --tag "태그이름"
+delight task tag --task-id <taskId> --tag "태그1" --tag "태그2"
 ```
 
 > `delight post`도 `delight task`의 별칭으로 사용 가능합니다.

@@ -10,10 +10,10 @@ use LWP::MediaTypes qw(guess_media_type);
 use Encode;
 use URI::Escape;
 
-# JSON::XS with utf8=>1:
-#   encode(): character strings → UTF-8 bytes (for sending to API)
-#   decode(): UTF-8 bytes → character strings (for reading from API)
-my $JSON = JSON::XS->new->utf8;
+# JSON::XS for encoding (utf8: character strings → UTF-8 bytes for API)
+my $JSON_UTF8 = JSON::XS->new->utf8;
+# JSON::XS for decoding (no utf8: works with decoded_content which returns Perl strings)
+my $JSON = JSON::XS->new;
 
 # Dooray API returns double-encoded UTF-8 for non-ASCII text.
 # After decode, strings contain UTF-8 byte values as Latin-1 codepoints.
@@ -65,13 +65,13 @@ sub request {
 
     if ($params) {
         $req->header('Content-Type' => 'application/json');
-        $req->content($JSON->encode($params));
+        $req->content($JSON_UTF8->encode($params));
     }
 
     my $res = $self->{ua}->request($req);
 
     if ($res->is_success) {
-        my $content = $res->content;
+        my $content = $res->decoded_content;
         if ($content) {
             my $data = $JSON->decode($content);
             _fix_double_utf8($data);
@@ -79,7 +79,21 @@ sub request {
         }
         return { header => { isSuccessful => 1 } };
     } else {
-        die "API Error ($method $path): " . $res->status_line . " " . $res->content . "\n";
+        my $msg = $res->status_line;
+        my $body = $res->decoded_content;
+        if ($body) {
+            my $data = eval { $JSON->decode($body) };
+            if ($data && $data->{header}{resultMessage}) {
+                my $rm = $data->{header}{resultMessage};
+                $rm =~ s/\+/ /g;
+                $rm = URI::Escape::uri_unescape($rm);
+                $rm = Encode::decode('UTF-8', $rm) if !utf8::is_utf8($rm);
+                $msg .= " - $rm";
+            } else {
+                $msg .= " $body";
+            }
+        }
+        die "API Error ($method $path): $msg\n";
     }
 }
 
@@ -272,7 +286,7 @@ sub _file_upload_request {
 
     my $res = $self->{ua}->request($req);
     if ($res->is_success) {
-        return $JSON->decode($res->content);
+        return $JSON->decode($res->decoded_content);
     } else {
         die "Upload Error: " . $res->status_line . " " . $res->content . "\n";
     }

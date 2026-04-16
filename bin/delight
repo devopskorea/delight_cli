@@ -86,14 +86,14 @@ if ($command eq 'whoami') {
 
         my $output = "# Project Settings ($project_id)\n\n";
 
-        $output .= "## Status (Workflows)\n\n";
+        $output .= "## Status\n\n";
         $output .= sprintf "%-25s | %-15s | %s\n", "ID", "Class", "Name";
         $output .= "-" x 60 . "\n";
         for my $w (@{$workflows->{result} || []}) {
             $output .= sprintf "%-25s | %-15s | %s\n", $w->{id}, $w->{class}, $w->{name};
         }
 
-        $output .= "\n## Phases (Milestones)\n\n";
+        $output .= "\n## Phases\n\n";
         $output .= sprintf "%-25s | %-15s | %s\n", "ID", "Status", "Name";
         $output .= "-" x 60 . "\n";
         for my $m (@{$milestones->{result} || []}) {
@@ -477,6 +477,16 @@ if ($command eq 'whoami') {
         $wiki_id = resolve_wiki_id($wiki_id, undef, $project_id);
         die "Error: wiki-id not found. Provide --wiki-id or configure default_wiki_id.\n" unless $wiki_id;
 
+        unless ($parent_id) {
+            my $wikis = $dooray->list_wikis()->{result} || [];
+            for my $w (@$wikis) {
+                if ($w->{id} eq $wiki_id) {
+                    $parent_id = $w->{home}{pageId};
+                    last;
+                }
+            }
+        }
+
         my $data = {
             subject => $subject,
             body => {
@@ -693,6 +703,157 @@ if ($command eq 'whoami') {
         foreach my $post (@{$data->{result}}) {
             printf "%-25s | %s\n", $post->{id}, $post->{subject};
         }
+    } elsif ($sub eq 'tag') {
+        my ($task_id, $project_id, @tags);
+        GetOptions(
+            "task-id=s"    => \$task_id,
+            "post-id=s"    => \$task_id,
+            "project-id=s" => \$project_id,
+            "tag=s"        => \@tags,
+        );
+        $task_id ||= shift @ARGV;
+        push @tags, @ARGV if @ARGV;
+        die "Usage: delight task tag --task-id <id> --tag <name> [--tag <name>]\n" unless $task_id && @tags;
+        $project_id = resolve_project_id($project_id, $task_id);
+        die "Error: project-id not found.\n" unless $project_id;
+
+        my $all_tags = $dooray->list_tags($project_id)->{result} || [];
+        my %tag_map = map { $_->{name} => $_->{id} } @$all_tags;
+
+        my @tag_ids;
+        for my $t (@tags) {
+            if ($tag_map{$t}) {
+                push @tag_ids, $tag_map{$t};
+                print "Tag: $t\n";
+            } else {
+                warn "Warning: Tag '$t' not found, skipped. Use 'delight project settings' to see available tags.\n";
+            }
+        }
+        die "Error: No valid tags found.\n" unless @tag_ids;
+
+        my $tag_prefix = { toTag => [ map { { id => $_ } } @tag_ids ] };
+        $dooray->update_post($project_id, $task_id, { tagIdList => \@tag_ids });
+        print "Task tagged successfully.\n";
+    } elsif ($sub eq 'duedate') {
+        my ($task_id, $project_id, $date, $today, $tomorrow);
+        GetOptions(
+            "task-id=s"    => \$task_id,
+            "post-id=s"    => \$task_id,
+            "project-id=s" => \$project_id,
+            "date=s"       => \$date,
+            "today"        => \$today,
+            "tomorrow"     => \$tomorrow,
+        );
+        $task_id ||= shift @ARGV;
+        $date    ||= shift @ARGV unless $today || $tomorrow;
+        if ($today) {
+            $date = strftime("%Y-%m-%dT23:59:59+09:00", localtime(time));
+        } elsif ($tomorrow) {
+            $date = strftime("%Y-%m-%dT23:59:59+09:00", localtime(time + 86400));
+        }
+        die "Usage: delight task duedate --task-id <id> --date <date> | --today | --tomorrow\n" unless $task_id && $date;
+        $project_id = resolve_project_id($project_id, $task_id);
+        die "Error: project-id not found.\n" unless $project_id;
+
+        # Support bare date like 2026-04-16
+        if ($date =~ /^\d{4}-\d{2}-\d{2}$/) {
+            $date .= "T23:59:59+09:00";
+        }
+
+        $dooray->update_post($project_id, $task_id, { dueDate => $date });
+        print "Task due date set to: $date\n";
+    } elsif ($sub eq 'phase') {
+        my ($task_id, $project_id, $phase);
+        GetOptions(
+            "task-id=s"    => \$task_id,
+            "post-id=s"    => \$task_id,
+            "project-id=s" => \$project_id,
+            "phase=s"      => \$phase,
+        );
+        $task_id ||= shift @ARGV;
+        $phase   ||= shift @ARGV;
+        die "Usage: delight task phase --task-id <id> --phase <name>\n" unless $task_id && $phase;
+        $project_id = resolve_project_id($project_id, $task_id);
+        die "Error: project-id not found.\n" unless $project_id;
+
+        my $milestones = $dooray->list_milestones($project_id);
+        my $milestone_id;
+        for my $m (@{$milestones->{result} || []}) {
+            if ($m->{name} eq $phase) {
+                $milestone_id = $m->{id};
+                last;
+            }
+        }
+        die "Error: Phase '$phase' not found. Use 'delight project settings' to see available phases.\n" unless $milestone_id;
+        $dooray->update_post($project_id, $task_id, { milestoneId => $milestone_id });
+        print "Task phase changed to: $phase\n";
+    } elsif ($sub eq 'status') {
+        my ($task_id, $project_id, $status, $done);
+        GetOptions(
+            "task-id=s"    => \$task_id,
+            "post-id=s"    => \$task_id,
+            "project-id=s" => \$project_id,
+            "status=s"     => \$status,
+            "done"         => \$done,
+        );
+        $task_id ||= shift @ARGV;
+        $status  ||= shift @ARGV unless $done;
+        die "Usage: delight task status --task-id <id> --status <name> | --done\n" unless $task_id && ($status || $done);
+        $project_id = resolve_project_id($project_id, $task_id);
+        die "Error: project-id not found.\n" unless $project_id;
+
+        if ($done) {
+            $dooray->set_post_done($project_id, $task_id);
+            print "Task marked as done.\n";
+        } else {
+            my $workflows = $dooray->list_workflows($project_id);
+            my $workflow_id;
+            for my $w (@{$workflows->{result} || []}) {
+                if ($w->{name} eq $status) {
+                    $workflow_id = $w->{id};
+                    last;
+                }
+            }
+            die "Error: Status '$status' not found. Use 'delight project settings' to see available statuses.\n" unless $workflow_id;
+            $dooray->set_post_workflow($project_id, $task_id, $workflow_id);
+            print "Task status changed to: $status\n";
+        }
+    } elsif ($sub eq 'assign') {
+        my ($task_id, $project_id, @assignees);
+        GetOptions(
+            "task-id=s"    => \$task_id,
+            "post-id=s"    => \$task_id,
+            "project-id=s" => \$project_id,
+            "assignee=s"   => \@assignees,
+        );
+        $task_id ||= shift @ARGV;
+        die "Usage: delight task assign --task-id <id> [--assignee <name|email>]\n" unless $task_id;
+        $project_id = resolve_project_id($project_id, $task_id);
+        die "Error: project-id not found.\n" unless $project_id;
+
+        my @to_members;
+        if (@assignees) {
+            for my $att (@assignees) {
+                my $search_res = ($att =~ /@/) ? $dooray->search_members_by_email($att) : $dooray->search_members($att);
+                my $members = $search_res->{result} || [];
+                if (@$members) {
+                    my $m = $members->[0];
+                    push @to_members, { type => 'member', member => { organizationMemberId => $m->{id} } };
+                    print "Assignee: $m->{name}\n";
+                } else {
+                    warn "Warning: Member '$att' not found, skipped.\n";
+                }
+            }
+        } else {
+            my $my_id = $dooray->whoami()->{result}{id};
+            push @to_members, { type => 'member', member => { organizationMemberId => $my_id } };
+            print "Assignee: me\n";
+        }
+
+        $dooray->update_post($project_id, $task_id, {
+            users => { to => \@to_members },
+        });
+        print "Task assigned successfully.\n";
     } elsif ($sub eq 'delete') {
         my ($post_id, $project_id);
         GetOptions(
