@@ -147,6 +147,9 @@ delight task duedate --task-id <taskId> --date 2026-04-20
 # 태스크 태그 지정
 delight task tag --task-id <taskId> --tag "태그이름"
 delight task tag --task-id <taskId> --tag "태그1" --tag "태그2"
+
+# 태스크 코멘트 추가
+delight task comment --task-id <taskId> --content "코멘트 내용"
 ```
 
 > `delight post`도 `delight task`의 별칭으로 사용 가능합니다.

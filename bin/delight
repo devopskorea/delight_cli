@@ -18,6 +18,7 @@ use SDBM_File;
 
 # Ensure UTF-8 for terminal and command-line arguments
 use open qw(:std :utf8);
+use utf8;
 binmode STDOUT, ":utf8";
 @ARGV = map { decode_utf8($_) } @ARGV;
 binmode STDERR, ":utf8";
@@ -94,6 +95,57 @@ sub _format_task {
         }
     }
     return join(' | ', @parts);
+}
+
+sub _parse_link_target {
+    my ($arg) = @_;
+    if ($arg =~ m{^https?://[^/]+/project/(tasks|pages)/(\d+)}) {
+        return { type => ($1 eq 'tasks' ? 'task' : 'page'), id => $2 };
+    }
+    if ($arg =~ /^(task|page):(\d+)$/) {
+        return { type => $1, id => $2 };
+    }
+    die "Invalid link target: $arg (use URL or task:<id>/page:<id>)\n";
+}
+
+sub _add_reference {
+    my ($body, $ref_line, $at_start) = @_;
+    $body //= '';
+
+    my @lines = split /\n/, $body, -1;
+    my $heading_idx;
+    for my $i (0..$#lines) {
+        if ($lines[$i] =~ /^#{1,6}\s*참고\s*$/) {
+            $heading_idx = $i;
+            last;
+        }
+    }
+
+    if (defined $heading_idx) {
+        my $section_end = scalar @lines;
+        for my $i (($heading_idx + 1)..$#lines) {
+            if ($lines[$i] =~ /^#{1,6}\s/) {
+                $section_end = $i;
+                last;
+            }
+        }
+        my $insert_at = $section_end;
+        for (my $j = $section_end - 1; $j > $heading_idx; $j--) {
+            if ($lines[$j] =~ /\S/) {
+                $insert_at = $j + 1;
+                last;
+            }
+        }
+        splice(@lines, $insert_at, 0, $ref_line);
+        return join("\n", @lines);
+    }
+
+    my $section = "## 참고\n\n$ref_line\n";
+    if ($at_start) {
+        return $body eq '' ? $section : "$section\n$body";
+    }
+    my $sep = ($body eq '' || $body =~ /\n\n$/) ? '' : ($body =~ /\n$/ ? "\n" : "\n\n");
+    return $body . $sep . $section;
 }
 
 if ($command eq 'whoami') {
@@ -188,7 +240,8 @@ if ($command eq 'whoami') {
         
         my $data = $dooray->list_events($start_of_period, $end_of_period);
         print "Agenda ($start_of_period to $end_of_period):\n";
-        foreach my $event (@{$data->{result}}) {
+        my @events = sort { ($a->{startedAt} || '') cmp ($b->{startedAt} || '') } @{$data->{result}};
+        foreach my $event (@events) {
             my $start = $event->{startedAt} || 'All Day';
             printf " [%-25s] %s\n", $start, $event->{subject};
         }
@@ -267,6 +320,9 @@ if ($command eq 'whoami') {
                     my $m = $members->[0];
                     push @to_members, { type => 'member', member => { organizationMemberId => $m->{id} } };
                     print "Attendee added: $m->{name}\n";
+                } elsif ($att =~ /@/) {
+                    push @to_members, { type => 'emailUser', emailUser => { emailAddress => $att } };
+                    print "Attendee added (email): $att\n";
                 } else {
                     warn "Warning: Member '$att' not found, skipped.\n";
                 }
@@ -350,42 +406,52 @@ if ($command eq 'whoami') {
                 print "Event updated successfully.\n";
             }
         } elsif ($action eq 'invite') {
-            my ($calendar_id, $event_id, $name);
+            my ($calendar_id, $event_id, $name, @attendees);
             GetOptions(
-                "calendarId=s" => \$calendar_id,
-                "eventId=s"    => \$event_id,
-                "name=s"       => \$name,
+                "calendarId=s"  => \$calendar_id,
+                "eventId=s"     => \$event_id,
+                "name=s"        => \$name,
+                "attendee=s"    => \@attendees,
             );
             $event_id ||= shift @ARGV;
-            $name     ||= join(' ', @ARGV);
-            
-            die "Usage: delight calendar invite <eventId> <name>\n" unless $event_id && $name;
+            $name     ||= shift @ARGV unless @attendees;
+            push @attendees, $name if $name;
+
+            die "Usage: delight calendar invite --eventId <id> --attendee <name|email>\n" unless $event_id && @attendees;
 
             if (!$calendar_id || $calendar_id eq 'primary') {
                 $calendar_id = $dooray->get_default_calendar_id();
             }
 
-            # 1. Search for member
-            my $search_res = $dooray->search_members($name);
-            my $members = $search_res->{result} || [];
-            die "Error: Member '$name' not found.\n" unless @$members;
-            
-            my $member = $members->[0]; # Take first match
-            print "Found member: $member->{name} ($member->{externalEmailAddress})\n";
-
-            # 2. Get current event to preserve data
+            # 1. Get current event to preserve data
             my $event = $dooray->get_event($calendar_id, $event_id)->{result};
-            
-            # 3. Add to attendees
             $event->{users} ||= { to => [] };
-            push @{$event->{users}{to}}, {
-                type   => 'member',
-                member => { organizationMemberId => $member->{id} }
-            };
 
-            # 4. Update
+            # 2. Search and add each attendee
+            for my $att (@attendees) {
+                my $search_res = ($att =~ /@/) ? $dooray->search_members_by_email($att) : $dooray->search_members($att);
+                my $members = $search_res->{result} || [];
+                if (@$members) {
+                    my $m = $members->[0];
+                    push @{$event->{users}{to}}, {
+                        type   => 'member',
+                        member => { organizationMemberId => $m->{id} }
+                    };
+                    print "Attendee added: $m->{name}\n";
+                } elsif ($att =~ /@/) {
+                    push @{$event->{users}{to}}, {
+                        type      => 'emailUser',
+                        emailUser => { emailAddress => $att }
+                    };
+                    print "Attendee added (email): $att\n";
+                } else {
+                    warn "Warning: Member '$att' not found, skipped.\n";
+                }
+            }
+
+            # 3. Update
             $dooray->update_event($calendar_id, $event_id, $event);
-            print "Successfully invited $member->{name} to event $event_id\n";
+            print "Event updated successfully.\n";
         }
     } elsif ($sub eq 'freebusy') {
         my $action = shift @ARGV;
@@ -782,6 +848,24 @@ if ($command eq 'whoami') {
                 }
             }
         }
+    } elsif ($sub eq 'comment') {
+        my ($task_id, $project_id, $content);
+        GetOptions(
+            "task-id=s"    => \$task_id,
+            "post-id=s"    => \$task_id,
+            "project-id=s" => \$project_id,
+            "content=s"    => \$content,
+        );
+        $task_id ||= shift @ARGV;
+        $content ||= join(' ', @ARGV);
+        die "Usage: delight task comment --task-id <id> --content <text>\n" unless $task_id && $content;
+        $project_id = resolve_project_id($project_id, $task_id);
+        die "Error: project-id not found.\n" unless $project_id;
+
+        $dooray->request('POST', "/project/v1/projects/$project_id/posts/$task_id/logs", {
+            body => { mimeType => "text/x-markdown", content => $content }
+        });
+        print "Comment added.\n";
     } elsif ($sub eq 'tag') {
         my ($task_id, $project_id, @tags);
         GetOptions(
@@ -1522,7 +1606,66 @@ if ($command eq 'whoami') {
     } else {
         print "Usage: delight config <key> <value>\n";
     }
+} elsif ($command eq 'link') {
+    my $at_start;
+    GetOptions("start" => \$at_start);
+    my @args = @ARGV;
+    die "Usage: delight link <a> <b> [--start]\n  a, b: Dooray URL or task:<id> / page:<id>\n" unless @args == 2;
+
+    my @sides = map { _parse_link_target($_) } @args;
+
+    for my $s (@sides) {
+        if ($s->{type} eq 'task') {
+            $s->{project_id} = resolve_project_id(undef, $s->{id});
+            die "Error: project-id not found for task $s->{id}\n" unless $s->{project_id};
+            my $detail = $dooray->get_post_detail($s->{project_id}, $s->{id});
+            $s->{subject} = $detail->{result}{subject};
+            $s->{body}    = $detail->{result}{body}{content} // '';
+        } else {
+            my $info = $dooray->get_wiki_page($s->{id});
+            $s->{wiki_id} = $info->{result}{wikiId};
+            die "Error: wiki-id not found for page $s->{id}\n" unless $s->{wiki_id};
+            my $wikis = $dooray->list_wikis()->{result} || [];
+            for my $w (@$wikis) {
+                if ($w->{id} eq $s->{wiki_id}) {
+                    $s->{project_id} = $w->{project}{id};
+                    last;
+                }
+            }
+            die "Error: project-id not found for wiki $s->{wiki_id}\n" unless $s->{project_id};
+            my $detail = $dooray->get_wiki_page_detail($s->{wiki_id}, $s->{id});
+            $s->{subject} = $detail->{result}{subject};
+            $s->{body}    = $detail->{result}{body}{content} // '';
+        }
+        my $kind = $s->{type} eq 'task' ? 'tasks' : 'pages';
+        $s->{link} = "dooray://$s->{project_id}/$kind/$s->{id}";
+    }
+
+    for my $i (0, 1) {
+        my $src = $sides[$i];
+        my $dst = $sides[1 - $i];
+        my $other_kind = $dst->{type} eq 'task' ? 'tasks' : 'pages';
+        if ($src->{body} && $src->{body} =~ m{dooray://[^/\s]+/$other_kind/$dst->{id}\b}) {
+            print "Already linked: $src->{type}:$src->{id} -> $dst->{type}:$dst->{id}\n";
+            next;
+        }
+        my $ref_line = "- [$dst->{subject}]($dst->{link})";
+        my $new_body = _add_reference($src->{body}, $ref_line, $at_start);
+
+        if ($src->{type} eq 'task') {
+            $dooray->update_post($src->{project_id}, $src->{id}, {
+                subject => $src->{subject},
+                body    => { mimeType => 'text/x-markdown', content => $new_body },
+            });
+        } else {
+            $dooray->update_wiki_page($src->{wiki_id}, $src->{id}, {
+                subject => $src->{subject},
+                body    => { mimeType => 'text/x-markdown', content => $new_body },
+            });
+        }
+        print "Linked: $src->{type}:$src->{id} -> $dst->{type}:$dst->{id}\n";
+    }
 } else {
     print "Usage: delight <command> [args]\n";
-    print "Commands: whoami, project, calendar, drive, page, task, download, upload, config\n";
+    print "Commands: whoami, project, calendar, drive, page, task, link, download, upload, config\n";
 }
