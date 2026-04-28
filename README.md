@@ -268,3 +268,26 @@ delight config <key> <value>
 - API 요청 간 지연 시간(Delay)은 `download` 및 `upload` 작업 시 자동으로 랜덤하게(2~10초) 적용되어 서버 부하를 최소화합니다. `--delay 0`으로 비활성화할 수 있습니다.
 - 위키 다운로드 시 페이지 계층 구조를 나타내는 `WIKI_MAP_<wiki-id>.md` 인덱스 파일이 자동 생성됩니다.
 - 위키 다운로드 파일은 `wiki_<wiki-id>/` 디렉토리에 저장됩니다 (다중 프로젝트 지원).
+
+## 문서
+
+상세 분석 문서는 [`docs/`](docs/README.md)에 있습니다.
+
+### 아키텍처
+- [서비스 아키텍처](docs/architecture/01_service_architecture.md)
+- [인프라 아키텍처](docs/architecture/02_infra_architecture.md)
+- [데이터베이스 (자체 DB 없음 / 로컬 캐시 매핑)](docs/architecture/03_database.md)
+- [API 분석 (Dooray REST 호출 매핑)](docs/architecture/04_api.md)
+
+### 관계 매트릭스
+- [명령 ↔ Dooray API ↔ 로컬 파일](docs/relations/command_api_file_matrix.md)
+
+### 시나리오 / 기능
+- [유저 시나리오](docs/scenarios/user_scenarios.md)
+- [기능 개발 현황 / 결함 인벤토리](docs/features/feature_status.md)
+
+### 설정
+- [config.yml 키 사전 / 환경변수 정책](docs/config/config_keys.md)
+
+### 히스토리
+- [2026-04-18 — 프로젝트 초기 분석](docs/history/2026-04-18_initial_analysis.md)
