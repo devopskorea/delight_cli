@@ -6,9 +6,9 @@ use warnings;
 use Delight::Config;
 use Delight::Dooray;
 use Getopt::Long;
-use JSON::XS;
+use JSON::PP;
+use HTTP::Tiny;
 use File::Spec;
-use File::HomeDir;
 use File::Path qw(make_path);
 use Encode qw(encode_utf8 decode_utf8);
 use POSIX qw(strftime);
@@ -16,9 +16,12 @@ use Time::Piece;
 use Fcntl;
 use SDBM_File;
 
+sub _home { return $ENV{HOME} || (getpwuid($<))[7] || '.'; }
+
 # Ensure UTF-8 for terminal and command-line arguments
 use open qw(:std :utf8);
 use utf8;
+use IPC::Open2;
 binmode STDOUT, ":utf8";
 @ARGV = map { decode_utf8($_) } @ARGV;
 binmode STDERR, ":utf8";
@@ -34,7 +37,7 @@ my $command = shift @ARGV || 'help';
 # --- Helpers ---
 
 sub base_dir {
-    $config->get('download_dir') || File::Spec->catdir(File::HomeDir->my_home, 'delight');
+    $config->get('download_dir') || File::Spec->catdir(_home(), 'delight');
 }
 
 sub resolve_wiki_id {
@@ -146,6 +149,84 @@ sub _add_reference {
     }
     my $sep = ($body eq '' || $body =~ /\n\n$/) ? '' : ($body =~ /\n$/ ? "\n" : "\n\n");
     return $body . $sep . $section;
+}
+
+sub _llm_complete {
+    my ($prompt) = @_;
+    my $cmd = $config->get('llm_command');
+    my $url = $config->get('llm_api_url');
+    my $key = $config->get('llm_api_key');
+
+    if ($cmd) {
+        my $pid = open2(my $out, my $in, $cmd) or die "Cannot run llm_command: $!\n";
+        binmode $in,  ':encoding(UTF-8)';
+        binmode $out, ':encoding(UTF-8)';
+        print $in $prompt;
+        close $in;
+        my $reply = do { local $/; <$out> };
+        close $out;
+        waitpid($pid, 0);
+        die "llm_command exited with status " . ($? >> 8) . "\n" if $? >> 8;
+        return $reply // '';
+    }
+    if ($url && $key) {
+        my $model = $config->get('llm_model') || 'gpt-4o-mini';
+        my $payload = {
+            model    => $model,
+            messages => [ { role => 'user', content => $prompt } ],
+        };
+        my $ua = HTTP::Tiny->new(timeout => 120);
+        my $res = $ua->request('POST', $url, {
+            headers => {
+                'Content-Type'  => 'application/json',
+                'Authorization' => "Bearer $key",
+            },
+            content => JSON::PP->new->utf8->encode($payload),
+        });
+        die "llm_api error: $res->{status} $res->{reason}\n" . ($res->{content} // '') . "\n" unless $res->{success};
+        # HTTP::Tiny returns raw bytes — server sends UTF-8 JSON, decode in one step.
+        my $data = JSON::PP->new->utf8->decode($res->{content});
+        return $data->{choices}[0]{message}{content} // '';
+    }
+    die "No LLM backend configured. Set llm_command (e.g. 'claude -p') or llm_api_url + llm_api_key.\n";
+}
+
+sub _wiki_meta {
+    my ($wiki_id) = @_;
+    for my $w (@{$dooray->list_wikis()->{result} || []}) {
+        return ($w->{home}{pageId}, $w->{project}{id}, $w->{name}) if $w->{id} eq $wiki_id;
+    }
+    return (undef, undef, undef);
+}
+
+sub _walk_wiki_pages {
+    my ($wiki_id, $parent_id, $depth) = @_;
+    $depth //= 0;
+    my @result;
+    my $page = 0;
+    while (1) {
+        my $r = $dooray->list_wiki_pages_paginated($wiki_id, $page, 100, parentPageId => $parent_id);
+        my $items = $r->{result} || [];
+        last unless @$items;
+        for my $p (@$items) {
+            push @result, { %$p, _depth => $depth };
+            push @result, _walk_wiki_pages($wiki_id, $p->{id}, $depth + 1);
+        }
+        last if scalar(@$items) < 100;
+        $page++;
+    }
+    return @result;
+}
+
+sub _load_wiki_pages_with_body {
+    my ($wiki_id, $home_id) = @_;
+    my @pages = _walk_wiki_pages($wiki_id, $home_id);
+    for my $p (@pages) {
+        my $d = $dooray->get_wiki_page_detail($wiki_id, $p->{id});
+        $p->{body} = $d->{result}{body}{content} // '';
+        $p->{subject} = $d->{result}{subject} // $p->{subject};
+    }
+    return @pages;
 }
 
 if ($command eq 'whoami') {
@@ -336,7 +417,7 @@ if ($command eq 'whoami') {
                 endedAt   => $end,
                 location  => $location || "",
                 personalSettings => {
-                    busy  => $busy ? JSON::XS::true : JSON::XS::false,
+                    busy  => $busy ? JSON::PP::true : JSON::PP::false,
                     class => $public ? "public" : "private",
                 },
             };
@@ -461,7 +542,7 @@ if ($command eq 'whoami') {
             # Note: Dooray free-busy query might need translation from GWS style
             # For now, just pass through if it's JSON
             if ($params_meta) {
-                 my $json = JSON::XS->new->utf8->pretty;
+                 my $json = JSON::PP->new->utf8->pretty;
                  my $res = $dooray->query_freebusy($json->decode($params_meta));
                  print "Free-Busy Query result:\n";
                  print $json->encode($res) . "\n";
@@ -767,6 +848,342 @@ if ($command eq 'whoami') {
             print $fh "# $subject\n\n$body_content\n";
             close $fh;
             print "Downloaded to $fpath\n";
+        }
+    } elsif ($sub eq 'search') {
+        my ($wiki_id, $project_id, $include_tasks);
+        GetOptions(
+            "wiki-id=s"     => \$wiki_id,
+            "project-id=s"  => \$project_id,
+            "include-tasks" => \$include_tasks,
+        );
+        my $query = shift @ARGV;
+        die "Usage: delight wiki search <query> [--wiki-id <id>] [--include-tasks] [--project-id <id>]\n" unless $query;
+
+        $wiki_id = resolve_wiki_id($wiki_id, undef, $project_id);
+        die "Error: wiki-id not found.\n" unless $wiki_id;
+
+        my ($home_id, $proj_for_links) = _wiki_meta($wiki_id);
+        die "Error: wiki home not found.\n" unless $home_id;
+
+        my $q_re = qr/\Q$query\E/i;
+        my @pages = _load_wiki_pages_with_body($wiki_id, $home_id);
+        my $page_hits = 0;
+        print "=== Wiki pages ===\n";
+        for my $p (@pages) {
+            my $subject = $p->{subject} // '';
+            my $body    = $p->{body} // '';
+            my @snippets;
+            for my $line (split /\n/, $body) {
+                if ($line =~ $q_re) {
+                    push @snippets, $line if @snippets < 3;
+                }
+            }
+            next unless ($subject =~ $q_re) || @snippets;
+            $page_hits++;
+            print "  $p->{id} | $subject\n";
+            print "    > $_\n" for @snippets;
+        }
+        print "  (no matches)\n" unless $page_hits;
+
+        if ($include_tasks) {
+            $project_id ||= $proj_for_links || $config->get('default_project_id');
+            die "Error: project-id not found for tasks search.\n" unless $project_id;
+            print "\n=== Tasks (subject only) ===\n";
+            my $task_hits = 0;
+            my $page = 0;
+            while (1) {
+                my $r = $dooray->list_posts_paginated($project_id, $page, 100);
+                my $items = $r->{result} || [];
+                last unless @$items;
+                for my $t (@$items) {
+                    next unless ($t->{subject} // '') =~ $q_re;
+                    print "  $t->{id} | $t->{subject}\n";
+                    $task_hits++;
+                }
+                last if scalar(@$items) < 100;
+                $page++;
+            }
+            print "  (no matches)\n" unless $task_hits;
+        }
+    } elsif ($sub eq 'index') {
+        my ($wiki_id, $project_id, $save);
+        GetOptions(
+            "wiki-id=s"    => \$wiki_id,
+            "project-id=s" => \$project_id,
+            "save"         => \$save,
+        );
+        $wiki_id = resolve_wiki_id($wiki_id, undef, $project_id);
+        die "Error: wiki-id not found.\n" unless $wiki_id;
+
+        my ($home_id, $proj_for_links, $wiki_name) = _wiki_meta($wiki_id);
+        die "Error: wiki home not found.\n" unless $home_id;
+
+        my @pages = _walk_wiki_pages($wiki_id, $home_id);
+        my $out = "# $wiki_name — Wiki Index\n\n";
+        for my $p (@pages) {
+            next if ($p->{subject} // '') =~ /^#TBD /;
+            my $indent = '  ' x $p->{_depth};
+            my $subject = $p->{subject} // '';
+            $out .= "$indent- [$subject](dooray://$proj_for_links/pages/$p->{id})\n";
+        }
+
+        if ($save) {
+            my $index_page;
+            for my $p (@pages) {
+                if (($p->{subject} // '') =~ /^Index$/i) { $index_page = $p; last; }
+            }
+            if ($index_page) {
+                $dooray->update_wiki_page($wiki_id, $index_page->{id}, {
+                    subject => $index_page->{subject},
+                    body    => { mimeType => 'text/x-markdown', content => $out },
+                });
+                print "Index page updated: $index_page->{id}\n";
+            } else {
+                my $res = $dooray->create_wiki_page($wiki_id, {
+                    subject      => "Index",
+                    parentPageId => $home_id,
+                    body         => { mimeType => 'text/x-markdown', content => $out },
+                });
+                print "Index page created: " . $res->{result}{id} . "\n";
+            }
+        } else {
+            print $out;
+        }
+    } elsif ($sub eq 'backlinks') {
+        my ($wiki_id, $project_id, $apply);
+        GetOptions(
+            "wiki-id=s"    => \$wiki_id,
+            "project-id=s" => \$project_id,
+            "apply"        => \$apply,
+        );
+        $wiki_id = resolve_wiki_id($wiki_id, undef, $project_id);
+        die "Error: wiki-id not found.\n" unless $wiki_id;
+
+        my ($home_id, $proj_for_links) = _wiki_meta($wiki_id);
+        die "Error: wiki home not found.\n" unless $home_id;
+
+        my @pages = _load_wiki_pages_with_body($wiki_id, $home_id);
+        my %page_by_id = map { $_->{id} => $_ } @pages;
+
+        my $missing = 0;
+        for my $src (@pages) {
+            my $body = $src->{body} // '';
+            my %seen;
+            while ($body =~ m{dooray://[^/\s]+/(tasks|pages)/(\d+)}g) {
+                my ($kind, $tgt_id) = ($1, $2);
+                next if $tgt_id eq $src->{id};
+                next if $seen{"$kind:$tgt_id"}++;
+                if ($kind eq 'pages') {
+                    my $tgt = $page_by_id{$tgt_id} or next;
+                    next if ($tgt->{body} // '') =~ m{dooray://[^/\s]+/pages/$src->{id}\b};
+                    print "Missing back-link: page:$tgt_id -> page:$src->{id}\n";
+                    $missing++;
+                    if ($apply) {
+                        my $ref_line = "- [$src->{subject}](dooray://$proj_for_links/pages/$src->{id})";
+                        my $new_body = _add_reference($tgt->{body}, $ref_line, undef);
+                        $dooray->update_wiki_page($wiki_id, $tgt_id, {
+                            subject => $tgt->{subject},
+                            body    => { mimeType => 'text/x-markdown', content => $new_body },
+                        });
+                        $tgt->{body} = $new_body;
+                        print "  applied.\n";
+                    }
+                } else {
+                    my $detail = eval { $dooray->get_post_detail($proj_for_links, $tgt_id)->{result} };
+                    next unless $detail;
+                    my $tgt_body = $detail->{body}{content} // '';
+                    next if $tgt_body =~ m{dooray://[^/\s]+/pages/$src->{id}\b};
+                    print "Missing back-link: task:$tgt_id -> page:$src->{id}\n";
+                    $missing++;
+                    if ($apply) {
+                        my $ref_line = "- [$src->{subject}](dooray://$proj_for_links/pages/$src->{id})";
+                        my $new_body = _add_reference($tgt_body, $ref_line, undef);
+                        $dooray->update_post($proj_for_links, $tgt_id, {
+                            subject => $detail->{subject},
+                            body    => { mimeType => 'text/x-markdown', content => $new_body },
+                        });
+                        print "  applied.\n";
+                    }
+                }
+            }
+        }
+        print "\nMissing back-links: $missing\n";
+        print "Run with --apply to add them.\n" if $missing && !$apply;
+    } elsif ($sub eq 'graph') {
+        my ($wiki_id, $project_id, $format);
+        GetOptions(
+            "wiki-id=s"    => \$wiki_id,
+            "project-id=s" => \$project_id,
+            "format=s"     => \$format,
+        );
+        $format ||= 'text';
+        $wiki_id = resolve_wiki_id($wiki_id, undef, $project_id);
+        die "Error: wiki-id not found.\n" unless $wiki_id;
+
+        my ($home_id) = _wiki_meta($wiki_id);
+        die "Error: wiki home not found.\n" unless $home_id;
+
+        my @pages = _load_wiki_pages_with_body($wiki_id, $home_id);
+        my %nodes = map { $_->{id} => $_->{subject} } @pages;
+        my @edges;
+        my %in_count;
+        for my $p (@pages) {
+            my %seen;
+            while ($p->{body} =~ m{dooray://[^/\s]+/(tasks|pages)/(\d+)}g) {
+                my ($kind, $tgt) = ($1, $2);
+                next if $tgt eq $p->{id};
+                next if $seen{"$kind:$tgt"}++;
+                push @edges, [$p->{id}, $tgt, $kind];
+                $in_count{$tgt}++ if $kind eq 'pages';
+            }
+        }
+
+        if ($format eq 'dot') {
+            print "digraph wiki {\n";
+            print "  rankdir=LR;\n";
+            for my $id (sort keys %nodes) {
+                my $label = $nodes{$id} // '';
+                $label =~ s/"/\\"/g;
+                print qq{  "$id" [label="$label"];\n};
+            }
+            for my $e (@edges) {
+                print qq{  "$e->[0]" -> "$e->[1]" [label="$e->[2]"];\n};
+            }
+            print "}\n";
+        } elsif ($format eq 'json') {
+            my $data = {
+                nodes => [ map { { id => $_, subject => $nodes{$_} } } sort keys %nodes ],
+                edges => [ map { { from => $_->[0], to => $_->[1], kind => $_->[2] } } @edges ],
+            };
+            print JSON::PP->new->pretty->canonical->encode($data);
+        } else {
+            print "Pages: " . scalar(keys %nodes) . "\n";
+            print "Edges: " . scalar(@edges) . "\n\n";
+            my @orphans = grep { !$in_count{$_} } sort keys %nodes;
+            print "Orphans (no inbound page links): " . scalar(@orphans) . "\n";
+            for my $id (@orphans) {
+                print "  $id | " . ($nodes{$id} // '') . "\n";
+            }
+            print "\nHubs (most inbound):\n";
+            my @sorted = sort { ($in_count{$b}||0) <=> ($in_count{$a}||0) } keys %in_count;
+            my $top = @sorted > 5 ? 4 : $#sorted;
+            for my $id (@sorted[0..$top]) {
+                printf "  %d | %s | %s\n", $in_count{$id}, $id, $nodes{$id} // '?';
+            }
+        }
+    } elsif ($sub eq 'compile') {
+        my ($wiki_id, $project_id, $save, $include_tasks);
+        GetOptions(
+            "wiki-id=s"     => \$wiki_id,
+            "project-id=s"  => \$project_id,
+            "save"          => \$save,
+            "include-tasks" => \$include_tasks,
+        );
+        my $topic = shift @ARGV;
+        die "Usage: delight wiki compile <topic> [--save] [--include-tasks]\n" unless $topic;
+
+        $wiki_id = resolve_wiki_id($wiki_id, undef, $project_id);
+        die "Error: wiki-id not found.\n" unless $wiki_id;
+
+        my ($home_id, $proj_for_links) = _wiki_meta($wiki_id);
+        die "Error: wiki home not found.\n" unless $home_id;
+        $project_id ||= $proj_for_links;
+
+        my $q_re = qr/\Q$topic\E/i;
+        my @pages = _load_wiki_pages_with_body($wiki_id, $home_id);
+        my @page_hits;
+        for my $p (@pages) {
+            next if ($p->{subject} // '') =~ /^#TBD /;
+            next unless ($p->{subject} =~ $q_re) || ($p->{body} =~ $q_re);
+            push @page_hits, $p;
+        }
+
+        my @task_hits;
+        if ($include_tasks && $project_id) {
+            my $page = 0;
+            while (1) {
+                my $r = $dooray->list_posts_paginated($project_id, $page, 100);
+                my $items = $r->{result} || [];
+                last unless @$items;
+                for my $t (@$items) {
+                    next if ($t->{subject} // '') =~ /^#TBD /;
+                    next unless ($t->{subject} // '') =~ $q_re;
+                    my $det = $dooray->get_post_detail($project_id, $t->{id})->{result};
+                    push @task_hits, {
+                        id => $t->{id}, subject => $det->{subject}, body => $det->{body}{content} // '',
+                    };
+                }
+                last if scalar(@$items) < 100;
+                $page++;
+            }
+        }
+
+        warn sprintf("Found %d page(s), %d task(s) for topic '%s'\n",
+            scalar @page_hits, scalar @task_hits, $topic);
+        die "No matches.\n" unless @page_hits || @task_hits;
+
+        my $bundle = '';
+        for my $p (@page_hits) {
+            $bundle .= "\n--- PAGE id=$p->{id}: $p->{subject} ---\n$p->{body}\n";
+        }
+        for my $t (@task_hits) {
+            $bundle .= "\n--- TASK id=$t->{id}: $t->{subject} ---\n$t->{body}\n";
+        }
+
+        my $prompt = <<"PROMPT";
+당신은 사내 위키 편집자입니다. 아래 자료를 종합해서 "$topic"에 관한 정식 위키 엔트리를 한국어 마크다운으로 작성하세요.
+
+다음 구조를 따르세요:
+# $topic
+
+## 개요
+2-3 문장으로 무엇인지 요약.
+
+## 동작
+명령 사용법, 옵션, 동작 흐름. 코드 블록과 예시 포함.
+
+## 최근 변경
+관련 태스크/페이지에서 추출한 변경 이력.
+
+## 관련 링크
+관련 태스크/페이지의 링크 목록.
+
+규칙:
+- 자료에 없는 내용은 만들지 마세요. 사실 위주로 간결하게.
+- 출력은 마크다운 본문만. 설명/추가 문구 없이.
+- 다른 페이지/태스크를 참조할 때는 반드시 다음 형식의 링크를 사용하세요:
+    - 페이지: [제목](dooray://$project_id/pages/<pageId>)
+    - 태스크: [제목](dooray://$project_id/tasks/<taskId>)
+  자료에 등장하는 ID를 그대로 사용하세요. 형식을 줄이거나 변형하지 마세요.
+
+자료:
+$bundle
+PROMPT
+
+        my $output = _llm_complete($prompt);
+
+        if ($save) {
+            my $existing;
+            for my $p (@pages) {
+                if (($p->{subject} // '') eq $topic) { $existing = $p; last; }
+            }
+            if ($existing) {
+                $dooray->update_wiki_page($wiki_id, $existing->{id}, {
+                    subject => $existing->{subject},
+                    body    => { mimeType => 'text/x-markdown', content => $output },
+                });
+                print "Wiki page updated: $existing->{id} ($topic)\n";
+            } else {
+                my $res = $dooray->create_wiki_page($wiki_id, {
+                    subject      => $topic,
+                    parentPageId => $home_id,
+                    body         => { mimeType => 'text/x-markdown', content => $output },
+                });
+                print "Wiki page created: " . $res->{result}{id} . " ($topic)\n";
+            }
+        } else {
+            print $output;
+            print "\n" unless $output =~ /\n$/;
         }
     }
 } elsif ($command eq 'task' || $command eq 'post') {
@@ -1536,7 +1953,7 @@ if ($command eq 'whoami') {
     my %cache;
     tie(%cache, 'SDBM_File', $cache_file, O_RDWR|O_CREAT, 0640) or die "Could not open DB file: $!\n";
     
-    my $up_dir = $config->get('upload_dir') || File::Spec->catdir(File::HomeDir->my_home, 'delight_upload');
+    my $up_dir = $config->get('upload_dir') || File::Spec->catdir(_home(), 'delight_upload');
     make_path($up_dir) unless -d $up_dir;
 
     if ($sub eq 'drive') {
@@ -1607,10 +2024,10 @@ if ($command eq 'whoami') {
         print "Usage: delight config <key> <value>\n";
     }
 } elsif ($command eq 'link') {
-    my $at_start;
-    GetOptions("start" => \$at_start);
+    my ($at_start, $one_way);
+    GetOptions("start" => \$at_start, "one-way" => \$one_way);
     my @args = @ARGV;
-    die "Usage: delight link <a> <b> [--start]\n  a, b: Dooray URL or task:<id> / page:<id>\n" unless @args == 2;
+    die "Usage: delight link <a> <b> [--start] [--one-way]\n  a, b: Dooray URL or task:<id> / page:<id>\n" unless @args == 2;
 
     my @sides = map { _parse_link_target($_) } @args;
 
@@ -1641,7 +2058,8 @@ if ($command eq 'whoami') {
         $s->{link} = "dooray://$s->{project_id}/$kind/$s->{id}";
     }
 
-    for my $i (0, 1) {
+    my @directions = $one_way ? (0) : (0, 1);
+    for my $i (@directions) {
         my $src = $sides[$i];
         my $dst = $sides[1 - $i];
         my $other_kind = $dst->{type} eq 'task' ? 'tasks' : 'pages';
@@ -1665,7 +2083,22 @@ if ($command eq 'whoami') {
         }
         print "Linked: $src->{type}:$src->{id} -> $dst->{type}:$dst->{id}\n";
     }
+} elsif ($command eq 'llm') {
+    my $sub = shift @ARGV || 'test';
+    if ($sub eq 'test') {
+        my $prompt = shift @ARGV;
+        unless (defined $prompt) {
+            local $/;
+            $prompt = <STDIN>;
+        }
+        $prompt //= 'Reply with exactly: pong';
+        my $reply = _llm_complete($prompt);
+        print $reply;
+        print "\n" unless $reply =~ /\n$/;
+    } else {
+        print "Usage: delight llm test [<prompt>]   (or pipe prompt via stdin)\n";
+    }
 } else {
     print "Usage: delight <command> [args]\n";
-    print "Commands: whoami, project, calendar, drive, page, task, link, download, upload, config\n";
+    print "Commands: whoami, project, calendar, drive, page, task, link, llm, download, upload, config\n";
 }
