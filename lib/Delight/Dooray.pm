@@ -2,22 +2,81 @@ package Delight::Dooray;
 
 use strict;
 use warnings;
-use LWP::UserAgent;
-use HTTP::Request;
-use HTTP::Request::Common;
-use JSON::XS;
-use LWP::MediaTypes qw(guess_media_type);
-use Encode;
-use URI::Escape;
+use HTTP::Tiny;
+use JSON::PP;
+use Encode qw(encode_utf8 decode :fallback_all);
 
-# JSON::XS for encoding (utf8: character strings → UTF-8 bytes for API)
-my $JSON_UTF8 = JSON::XS->new->utf8;
-# JSON::XS for decoding (no utf8: works with decoded_content which returns Perl strings)
-my $JSON = JSON::XS->new;
+# JSON::PP for encoding (utf8: character strings → UTF-8 bytes for API)
+my $JSON_UTF8 = JSON::PP->new->utf8;
+# JSON::PP for decoding raw bytes (server response is UTF-8 JSON bytes)
+my $JSON_DEC  = JSON::PP->new->utf8;
 
-# Dooray API returns double-encoded UTF-8 for non-ASCII text.
+# --- Helpers (replace URI::Escape and LWP::MediaTypes) ---
+
+# Percent-encode bytes that aren't RFC3986 unreserved.
+sub _uri_escape {
+    my ($s) = @_;
+    return '' unless defined $s;
+    my $bytes = utf8::is_utf8($s) ? Encode::encode_utf8($s) : $s;
+    $bytes =~ s/([^A-Za-z0-9\-._~])/sprintf("%%%02X", ord($1))/ge;
+    return $bytes;
+}
+
+sub _uri_unescape {
+    my ($s) = @_;
+    return $s unless defined $s;
+    $s =~ s/%([0-9A-Fa-f]{2})/chr(hex($1))/ge;
+    return $s;
+}
+
+# Tiny MIME-type lookup by file extension (replaces LWP::MediaTypes).
+my %MIME = (
+    txt  => 'text/plain',
+    md   => 'text/markdown',
+    html => 'text/html',
+    htm  => 'text/html',
+    css  => 'text/css',
+    csv  => 'text/csv',
+    json => 'application/json',
+    xml  => 'application/xml',
+    yaml => 'application/yaml',
+    yml  => 'application/yaml',
+    pdf  => 'application/pdf',
+    zip  => 'application/zip',
+    gz   => 'application/gzip',
+    tar  => 'application/x-tar',
+    png  => 'image/png',
+    jpg  => 'image/jpeg',
+    jpeg => 'image/jpeg',
+    gif  => 'image/gif',
+    svg  => 'image/svg+xml',
+    webp => 'image/webp',
+    mp3  => 'audio/mpeg',
+    mp4  => 'video/mp4',
+);
+sub _guess_mime {
+    my ($path) = @_;
+    if ($path && $path =~ /\.([A-Za-z0-9]+)$/) {
+        my $ext = lc $1;
+        return $MIME{$ext} if $MIME{$ext};
+    }
+    return 'application/octet-stream';
+}
+
+# Decompress if Content-Encoding indicates gzip. Returns bytes either way.
+sub _maybe_gunzip {
+    my ($bytes, $encoding) = @_;
+    return $bytes unless defined $bytes && length($bytes);
+    return $bytes unless defined $encoding && $encoding =~ /gzip/i;
+    require IO::Uncompress::Gunzip;
+    my $out;
+    IO::Uncompress::Gunzip::gunzip(\$bytes => \$out) or return $bytes;
+    return $out;
+}
+
+# Dooray API sometimes returns double-encoded UTF-8 for non-ASCII text.
 # After decode, strings contain UTF-8 byte values as Latin-1 codepoints.
-# This function decodes the second UTF-8 layer recursively.
+# This recursively decodes the second UTF-8 layer.
 sub _fix_double_utf8 {
     my ($data) = @_;
     if (ref $data eq 'HASH') {
@@ -42,13 +101,15 @@ sub _fix_double_utf8 {
 sub new {
     my ($class, %args) = @_;
     return bless {
-        ua     => LWP::UserAgent->new(),
+        ua     => HTTP::Tiny->new(timeout => 60, agent => 'delight/0.1 '),
+        # Separate UA for file downloads — we follow redirects manually to preserve auth.
+        ua_no_redir => HTTP::Tiny->new(timeout => 120, agent => 'delight/0.1 ', max_redirect => 0),
         token  => $args{token},
         domain => $args{domain} || 'https://api.dooray.com',
     }, $class;
 }
 
-sub _auth_header { return ('Authorization' => "dooray-api " . $_[0]->{token}) }
+sub _auth_value { return "dooray-api " . ($_[0]->{token} // '') }
 
 sub _file_api_url {
     my ($self, $path) = @_;
@@ -58,42 +119,42 @@ sub _file_api_url {
 
 sub request {
     my ($self, $method, $path, $params) = @_;
-
-    my $req = HTTP::Request->new($method => $self->{domain} . $path);
-    $req->header($self->_auth_header);
-    $req->header('Accept' => 'application/json');
-
+    my $url = $self->{domain} . $path;
+    my %headers = (
+        'Authorization' => $self->_auth_value,
+        'Accept'        => 'application/json',
+        'Accept-Encoding' => 'identity',  # ask server not to gzip; simpler decode
+    );
+    my %opts = (headers => \%headers);
     if ($params) {
-        $req->header('Content-Type' => 'application/json');
-        $req->content($JSON_UTF8->encode($params));
+        $headers{'Content-Type'} = 'application/json';
+        $opts{content} = $JSON_UTF8->encode($params);
     }
 
-    my $res = $self->{ua}->request($req);
+    my $res = $self->{ua}->request($method, $url, \%opts);
 
-    if ($res->is_success) {
-        my $content = $res->decoded_content;
-        if ($content) {
-            my $data = $JSON->decode($content);
-            _fix_double_utf8($data);
-            return $data;
-        }
-        return { header => { isSuccessful => 1 } };
+    my $body = _maybe_gunzip($res->{content}, $res->{headers}{'content-encoding'});
+
+    if ($res->{success}) {
+        return { header => { isSuccessful => 1 } } unless defined $body && length $body;
+        my $data = $JSON_DEC->decode($body);
+        _fix_double_utf8($data);
+        return $data;
     } else {
-        my $msg = $res->status_line;
-        my $body = $res->decoded_content;
-        if ($body) {
-            my $data = eval { $JSON->decode($body) };
+        my $status = "$res->{status} $res->{reason}";
+        if (defined $body && length $body) {
+            my $data = eval { $JSON_DEC->decode($body) };
             if ($data && $data->{header}{resultMessage}) {
                 my $rm = $data->{header}{resultMessage};
                 $rm =~ s/\+/ /g;
-                $rm = URI::Escape::uri_unescape($rm);
+                $rm = _uri_unescape($rm);
                 $rm = Encode::decode('UTF-8', $rm) if !utf8::is_utf8($rm);
-                $msg .= " - $rm";
+                $status .= " - $rm";
             } else {
-                $msg .= " $body";
+                $status .= " " . (eval { decode('UTF-8', $body, FB_DEFAULT) } // $body);
             }
         }
-        die "API Error ($method $path): $msg\n";
+        die "API Error ($method $path): $status\n";
     }
 }
 
@@ -104,7 +165,7 @@ sub list_projects { $_[0]->request('GET', '/project/v1/projects') }
 
 sub search_members {
     my ($self, $name) = @_;
-    $self->request('GET', "/common/v1/members?name=" . uri_escape($name));
+    $self->request('GET', "/common/v1/members?name=" . _uri_escape($name));
 }
 
 sub search_members_by_email {
@@ -269,27 +330,52 @@ sub list_files {
     $self->request('GET', "/drive/v1/drives/$drive_id/files?size=$size&page=$page&type=$type");
 }
 
+# Build a multipart/form-data body manually (no HTTP::Request::Common).
+sub _build_multipart {
+    my ($file_path, $name, $mime) = @_;
+
+    open my $fh, '<:raw', $file_path or die "Cannot open $file_path: $!\n";
+    my $file_bytes = do { local $/; <$fh> };
+    close $fh;
+
+    my $boundary = '----delight-' . sprintf("%x%x", time, $$);
+    my $name_bytes = utf8::is_utf8($name) ? Encode::encode_utf8($name) : $name;
+    # Sanitize filename for header (strip CR/LF and double-quote)
+    (my $filename = $name_bytes) =~ tr/\r\n"//d;
+
+    my $body = '';
+    $body .= "--$boundary\r\n";
+    $body .= qq{Content-Disposition: form-data; name="file"; filename="$filename"\r\n};
+    $body .= "Content-Type: $mime\r\n\r\n";
+    $body .= $file_bytes;
+    $body .= "\r\n--$boundary\r\n";
+    $body .= qq{Content-Disposition: form-data; name="name"\r\n\r\n};
+    $body .= $name_bytes;
+    $body .= "\r\n--$boundary--\r\n";
+
+    return ($boundary, $body);
+}
+
 sub _file_upload_request {
     my ($self, $method, $url, $file_path, $name) = @_;
 
-    my $type = guess_media_type($file_path);
-    my $req = POST(
-        $url,
-        $self->_auth_header,
-        Content_Type => 'multipart/form-data',
-        Content => [
-            file => [ $file_path, $name, 'Content-Type' => $type ],
-            name => $name,
-        ]
-    );
-    $req->method($method) if $method ne 'POST';
+    my $mime = _guess_mime($file_path);
+    my ($boundary, $body) = _build_multipart($file_path, $name, $mime);
 
-    my $res = $self->{ua}->request($req);
-    if ($res->is_success) {
-        return $JSON->decode($res->decoded_content);
-    } else {
-        die "Upload Error: " . $res->status_line . " " . $res->content . "\n";
+    my $res = $self->{ua}->request($method, $url, {
+        headers => {
+            'Authorization' => $self->_auth_value,
+            'Content-Type'  => "multipart/form-data; boundary=$boundary",
+        },
+        content => $body,
+    });
+
+    if ($res->{success}) {
+        my $data = $JSON_DEC->decode($res->{content});
+        _fix_double_utf8($data);
+        return $data;
     }
+    die "Upload Error: $res->{status} $res->{reason} " . ($res->{content} // '') . "\n";
 }
 
 sub upload_file {
@@ -329,8 +415,6 @@ sub update_wiki_page {
     $self->request('PUT', "/wiki/v1/wikis/$wiki_id/pages/$page_id", $data);
 }
 
-
-
 sub list_wiki_pages_paginated {
     my ($self, $wiki_id, $page, $size, %opts) = @_;
     $page ||= 0;
@@ -356,29 +440,28 @@ sub get_wiki_page_files {
 }
 
 # --- File Download ---
-
+# Follows redirects manually so the Authorization header is re-applied
+# (HTTP::Tiny strips auth on cross-host redirects).
 sub download_file {
     my ($self, $url, $save_path) = @_;
+    my %headers = ('Authorization' => $self->_auth_value);
 
-    my $req = HTTP::Request->new('GET' => $url);
-    $req->header($self->_auth_header);
-
-    # Handle 307 redirects manually to preserve Authorization header
-    my $res = $self->{ua}->simple_request($req);
-    while ($res->is_redirect) {
-        $req = HTTP::Request->new('GET' => $res->header('Location'));
-        $req->header($self->_auth_header);
-        $res = $self->{ua}->simple_request($req);
+    my $hops = 0;
+    while ($hops++ < 10) {
+        my $res = $self->{ua_no_redir}->request('GET', $url, { headers => \%headers });
+        if ($res->{status} >= 300 && $res->{status} < 400 && $res->{headers}{location}) {
+            $url = $res->{headers}{location};
+            next;
+        }
+        if ($res->{success}) {
+            open my $fh, '>:raw', $save_path or die "Could not open $save_path: $!\n";
+            print $fh $res->{content};
+            close $fh;
+            return 1;
+        }
+        die "Download Error from $url: $res->{status} $res->{reason} " . ($res->{content} // '') . "\n";
     }
-
-    if ($res->is_success) {
-        open my $fh, '>:raw', $save_path or die "Could not open $save_path: $!\n";
-        print $fh $res->content;
-        close $fh;
-        return 1;
-    } else {
-        die "Download Error from $url: " . $res->status_line . " " . $res->content . "\n";
-    }
+    die "Too many redirects downloading $url\n";
 }
 
 1;
